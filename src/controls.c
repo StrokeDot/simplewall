@@ -555,6 +555,9 @@ LPCWSTR _app_getstatelocale (
 {
 	UINT locale_id;
 
+	if (install_type != INSTALL_DISABLED && _wfp_issafepause ())
+		return L"Safe Pause active (blocked apps stay blocked)";
+
 	switch (install_type)
 	{
 		case INSTALL_ENABLED:
@@ -678,7 +681,39 @@ VOID _app_settrayicon (
 
 	_r_sys_loadicon (_r_sys_getimagebase (), MAKEINTRESOURCE (icon_id), icon_size, &new_handle);
 
-	_r_tray_setinfo (hwnd, &GUID_TrayIcon, new_handle, _r_app_getname ());
+	if (install_type != INSTALL_DISABLED && _wfp_issafepause ())
+	{
+		WCHAR tooltip[128];
+		LONG64 remaining;
+
+		remaining = _wfp_getsafepause_remaining ();
+
+		if (remaining > 0)
+		{
+			_r_str_printf (
+				tooltip,
+				RTL_NUMBER_OF (tooltip),
+				L"%s — Safe Pause (%lldm left, blocked apps stay blocked)",
+				_r_app_getname (),
+				(remaining + 59) / 60
+			);
+		}
+		else
+		{
+			_r_str_printf (
+				tooltip,
+				RTL_NUMBER_OF (tooltip),
+				L"%s — Safe Pause (blocked apps stay blocked)",
+				_r_app_getname ()
+			);
+		}
+
+		_r_tray_setinfo (hwnd, &GUID_TrayIcon, new_handle, tooltip);
+	}
+	else
+	{
+		_r_tray_setinfo (hwnd, &GUID_TrayIcon, new_handle, _r_app_getname ());
+	}
 
 	current_handle = _InterlockedCompareExchangePointer (&config.htray_icon, new_handle, NULL);
 

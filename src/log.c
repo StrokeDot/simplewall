@@ -1405,7 +1405,7 @@ VOID NTAPI _app_logthread (
 				_app_logwrite_ui (hwnd, ptr_log);
 
 			// display notification
-			if (is_notificationenabled)
+			if (is_notificationenabled && !_wfp_issafepause ())
 			{
 				if (ptr_app && !ptr_log->is_allow && is_exludeblocklist)
 				{

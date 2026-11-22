@@ -97,6 +97,7 @@ DECLSPEC_SELECTANY const LONG64 timer_array[] =
 #endif
 
 #define WM_NOTIFICATION (WM_APP + 21)
+#define WM_SAFEPAUSE_EXPIRED (WM_APP + 22)
 
 #include "controls.h"
 #include "db.h"

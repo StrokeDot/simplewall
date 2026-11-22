@@ -156,6 +156,10 @@ BOOLEAN _app_issystemhash (
 	_In_ ULONG_PTR app_hash
 );
 
+BOOLEAN _app_isappblocked (
+	_In_ PITEM_APP ptr_app
+);
+
 VOID _app_getcount (
 	_Out_ PITEM_STATUS status
 );

@@ -1497,6 +1497,30 @@ BOOLEAN _app_issystemhash (
 	return (app_hash == config.ntoskrnl_hash || app_hash == config.svchost_hash);
 }
 
+BOOLEAN _app_isappblocked (
+	_In_ PITEM_APP ptr_app
+)
+{
+	if (!ptr_app || ptr_app->is_enabled)
+		return FALSE;
+
+	if (_app_isdisabledremoval (ptr_app->app_hash))
+		return FALSE;
+
+	if (ptr_app->is_silent)
+		return TRUE;
+
+	if (ptr_app->type == DATA_APP_REGULAR ||
+		ptr_app->type == DATA_APP_DEVICE ||
+		ptr_app->type == DATA_APP_NETWORK ||
+		ptr_app->type == DATA_APP_PICO)
+	{
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
 BOOLEAN _app_isrulesupportedbyos (
 	_In_ PR_STRINGREF os_version
 )

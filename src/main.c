@@ -2371,6 +2371,24 @@ INT_PTR CALLBACK DlgProc (
 			return 0;
 		}
 
+		case WM_SAFEPAUSE_EXPIRED:
+		{
+			if (_wfp_issafepause ())
+			{
+				_wfp_setprotectionmode (hwnd, PROTECTION_MODE_STRICT, 0);
+
+				_r_tray_popup (
+					hwnd,
+					&GUID_TrayIcon,
+					NIIF_INFO,
+					_r_app_getname (),
+					L"Safe Pause ended — Strict Protection resumed."
+				);
+			}
+
+			return 0;
+		}
+
 		case WM_CLOSE:
 		{
 			LPCWSTR cfg_name;
@@ -2378,7 +2396,7 @@ INT_PTR CALLBACK DlgProc (
 
 			if (_wfp_isfiltersinstalled ())
 			{
-				if (_app_istimersactive ())
+				if (_app_istimersactive () || _wfp_getsafepause_remaining () > 0)
 				{
 					cfg_name = L"ConfirmExitTimer";
 					locale_id = IDS_QUESTION_TIMER;
@@ -2405,6 +2423,8 @@ INT_PTR CALLBACK DlgProc (
 		case WM_DESTROY:
 		{
 			HANDLE hengine;
+
+			_wfp_cancelsafepause_timer ();
 
 			_app_loginit (FALSE);
 
@@ -3608,8 +3628,38 @@ INT_PTR CALLBACK DlgProc (
 					is_filtersinstalled = !_wfp_isfiltersinstalled ();
 
 					if (_app_installmessage (hwnd, is_filtersinstalled))
-						_app_changefilters (hwnd, is_filtersinstalled, TRUE);
+						_wfp_setprotectionmode (hwnd, is_filtersinstalled ? PROTECTION_MODE_STRICT : PROTECTION_MODE_OFF, 0);
 
+					break;
+				}
+
+				case IDM_SAFEPAUSE_RESUME:
+				{
+					_wfp_setprotectionmode (hwnd, PROTECTION_MODE_STRICT, 0);
+					break;
+				}
+
+				case IDM_SAFEPAUSE_15M:
+				{
+					_wfp_setprotectionmode (hwnd, PROTECTION_MODE_SAFE_PAUSE, 15 * 60);
+					break;
+				}
+
+				case IDM_SAFEPAUSE_30M:
+				{
+					_wfp_setprotectionmode (hwnd, PROTECTION_MODE_SAFE_PAUSE, 30 * 60);
+					break;
+				}
+
+				case IDM_SAFEPAUSE_1H:
+				{
+					_wfp_setprotectionmode (hwnd, PROTECTION_MODE_SAFE_PAUSE, 60 * 60);
+					break;
+				}
+
+				case IDM_SAFEPAUSE_INDEFINITE:
+				{
+					_wfp_setprotectionmode (hwnd, PROTECTION_MODE_SAFE_PAUSE, 0);
 					break;
 				}
 

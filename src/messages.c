@@ -921,6 +921,40 @@ VOID _app_message_traycontextmenu (
 	if (_wfp_isfiltersapplying ())
 		_r_menu_enableitem (hsubmenu, IDM_TRAY_START, FALSE, FALSE);
 
+	// Insert Safe Pause submenu right after IDM_TRAY_START (position 3)
+	{
+		HMENU hsafepause_menu;
+		BOOLEAN is_safepause;
+		BOOLEAN is_applying;
+
+		hsafepause_menu = CreatePopupMenu ();
+
+		if (hsafepause_menu)
+		{
+			is_safepause = _wfp_issafepause ();
+			is_applying = _wfp_isfiltersapplying ();
+
+			if (is_safepause)
+			{
+				AppendMenuW (hsafepause_menu, MF_STRING | (is_applying ? MF_GRAYED : 0), IDM_SAFEPAUSE_RESUME, L"Resume Strict Protection");
+				AppendMenuW (hsafepause_menu, MF_SEPARATOR, 0, NULL);
+			}
+
+			AppendMenuW (hsafepause_menu, MF_STRING | (is_applying ? MF_GRAYED : 0), IDM_SAFEPAUSE_15M, L"Safe Pause for 15 minutes");
+			AppendMenuW (hsafepause_menu, MF_STRING | (is_applying ? MF_GRAYED : 0), IDM_SAFEPAUSE_30M, L"Safe Pause for 30 minutes");
+			AppendMenuW (hsafepause_menu, MF_STRING | (is_applying ? MF_GRAYED : 0), IDM_SAFEPAUSE_1H, L"Safe Pause for 1 hour");
+			AppendMenuW (hsafepause_menu, MF_STRING | (is_applying ? MF_GRAYED : 0), IDM_SAFEPAUSE_INDEFINITE, L"Safe Pause until I resume");
+
+			InsertMenuW (
+				hsubmenu,
+				3,
+				MF_BYPOSITION | MF_POPUP | (is_applying ? MF_GRAYED : 0),
+				(UINT_PTR)hsafepause_menu,
+				is_safepause ? L"Safe Pause (ACTIVE — Blocked stay blocked)" : L"Safe Pause (Keep Blocked Apps Blocked)"
+			);
+		}
+	}
+
 	SetForegroundWindow (hwnd); // don't touch
 
 	_r_menu_popup (hsubmenu, hwnd, NULL, TRUE);

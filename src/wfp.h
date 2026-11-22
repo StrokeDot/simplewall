@@ -40,6 +40,25 @@ BOOLEAN _wfp_isfiltersapplying ();
 
 BOOLEAN _wfp_isfiltersinstalled ();
 
+BOOLEAN _wfp_issafepause ();
+
+ENUM_PROTECTION_MODE _wfp_getprotectionmode ();
+
+LONG64 _wfp_getsafepause_remaining ();
+
+VOID _wfp_cancelsafepause_timer ();
+
+VOID _wfp_setsafepause_timer (
+	_In_opt_ HWND hwnd,
+	_In_ LONG64 seconds
+);
+
+BOOLEAN _wfp_setprotectionmode (
+	_In_ HWND hwnd,
+	_In_ ENUM_PROTECTION_MODE mode,
+	_In_ LONG64 duration_seconds
+);
+
 HANDLE _wfp_getenginehandle ();
 
 ENUM_INSTALL_TYPE _wfp_getinstalltype ();

@@ -56,6 +56,13 @@ typedef enum _ENUM_INSTALL_TYPE
 	INSTALL_ENABLED_TEMPORARY,
 } ENUM_INSTALL_TYPE;
 
+typedef enum _ENUM_PROTECTION_MODE
+{
+	PROTECTION_MODE_OFF = 0,
+	PROTECTION_MODE_STRICT = 1,
+	PROTECTION_MODE_SAFE_PAUSE = 2,
+} ENUM_PROTECTION_MODE;
+
 typedef enum _ENUM_INFO_DATA
 {
 	INFO_PATH = 1,
@@ -244,11 +251,15 @@ typedef struct _STATIC_DATA
 	ULONG_PTR wusvc_hash;
 	ULONG_PTR my_hash;
 
+	PTP_TIMER hsafepause_timer;
+	LONG64 safepause_until;
+
 	BOOLEAN is_notifytimeout;
 	BOOLEAN is_notifymouse;
 	BOOLEAN is_neteventenabled;
 	BOOLEAN is_neteventset;
 	BOOLEAN is_filterstemporary;
+	volatile CHAR is_safepause;
 } STATIC_DATA, *PSTATIC_DATA;
 
 typedef struct _PROFILE_DATA
@@ -561,3 +572,9 @@ typedef struct _ITEM_TAB_CONTEXT
 	INT listview_id;
 	INT locale_id;
 } ITEM_TAB_CONTEXT, *PITEM_TAB_CONTEXT;
+
+BOOLEAN _app_changefilters (
+	_In_ HWND hwnd,
+	_In_ BOOLEAN is_install,
+	_In_ BOOLEAN is_forced
+);

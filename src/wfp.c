@@ -75,6 +75,154 @@ BOOLEAN _wfp_isfiltersinstalled ()
 	return (install_type != INSTALL_DISABLED);
 }
 
+BOOLEAN _wfp_issafepause ()
+{
+	return (_InterlockedCompareExchange8 (&config.is_safepause, 0, 0) != 0);
+}
+
+ENUM_PROTECTION_MODE _wfp_getprotectionmode ()
+{
+	if (!_wfp_isfiltersinstalled ())
+		return PROTECTION_MODE_OFF;
+
+	if (_wfp_issafepause ())
+		return PROTECTION_MODE_SAFE_PAUSE;
+
+	return PROTECTION_MODE_STRICT;
+}
+
+LONG64 _wfp_getsafepause_remaining ()
+{
+	LONG64 now;
+	LONG64 until;
+
+	if (!_wfp_issafepause ())
+		return 0;
+
+	until = config.safepause_until;
+
+	if (until <= 0)
+		return 0;
+
+	now = _r_unixtime_now ();
+
+	return (until > now) ? (until - now) : 0;
+}
+
+static VOID CALLBACK _wfp_safepause_timer_callback (
+	_Inout_ PTP_CALLBACK_INSTANCE instance,
+	_Inout_opt_ PVOID context,
+	_Inout_ PTP_TIMER timer
+)
+{
+	HWND hwnd;
+
+	UNREFERENCED_PARAMETER (instance);
+	UNREFERENCED_PARAMETER (timer);
+
+	hwnd = (HWND)context;
+
+	if (!hwnd)
+		hwnd = _r_app_gethwnd ();
+
+	if (hwnd && IsWindow (hwnd))
+		PostMessageW (hwnd, WM_SAFEPAUSE_EXPIRED, 0, 0);
+}
+
+VOID _wfp_cancelsafepause_timer ()
+{
+	PTP_TIMER current_timer;
+
+	config.safepause_until = 0;
+
+	current_timer = (PTP_TIMER)_InterlockedExchangePointer ((PVOID_PTR)&config.hsafepause_timer, NULL);
+
+	if (current_timer)
+	{
+		TpSetTimer (current_timer, NULL, 0, 0);
+		TpReleaseTimer (current_timer);
+	}
+}
+
+VOID _wfp_setsafepause_timer (
+	_In_opt_ HWND hwnd,
+	_In_ LONG64 seconds
+)
+{
+	PTP_TIMER htimer;
+	FILETIME file_time;
+	LARGE_INTEGER li;
+	LONG64 current_time;
+	NTSTATUS status;
+
+	_wfp_cancelsafepause_timer ();
+
+	if (seconds <= 0)
+		return;
+
+	current_time = _r_unixtime_now ();
+
+	_r_unixtime_to_filetime (current_time + seconds, &file_time);
+	_r_calc_filetime2largeinteger (&file_time, &li);
+
+	status = TpAllocTimer (&htimer, &_wfp_safepause_timer_callback, (PVOID)hwnd, NULL);
+
+	if (NT_SUCCESS (status))
+	{
+		TpSetTimer (htimer, &li, 0, 0);
+
+		config.safepause_until = current_time + seconds;
+		_InterlockedExchangePointer ((PVOID_PTR)&config.hsafepause_timer, htimer);
+	}
+}
+
+BOOLEAN _wfp_setprotectionmode (
+	_In_ HWND hwnd,
+	_In_ ENUM_PROTECTION_MODE mode,
+	_In_ LONG64 duration_seconds
+)
+{
+	if (_wfp_isfiltersapplying ())
+		return FALSE;
+
+	switch (mode)
+	{
+		case PROTECTION_MODE_OFF:
+		{
+			_InterlockedExchange8 (&config.is_safepause, FALSE);
+			_wfp_cancelsafepause_timer ();
+
+			return _app_changefilters (hwnd, FALSE, TRUE);
+		}
+
+		case PROTECTION_MODE_STRICT:
+		{
+			_InterlockedExchange8 (&config.is_safepause, FALSE);
+			_wfp_cancelsafepause_timer ();
+
+			return _app_changefilters (hwnd, TRUE, TRUE);
+		}
+
+		case PROTECTION_MODE_SAFE_PAUSE:
+		{
+			_InterlockedExchange8 (&config.is_safepause, TRUE);
+
+			if (duration_seconds > 0)
+			{
+				_wfp_setsafepause_timer (hwnd, duration_seconds);
+			}
+			else
+			{
+				_wfp_cancelsafepause_timer ();
+			}
+
+			return _app_changefilters (hwnd, TRUE, TRUE);
+		}
+	}
+
+	return FALSE;
+}
+
 HANDLE _wfp_getenginehandle ()
 {
 	static R_INITONCE init_once = PR_INITONCE_INIT;
@@ -438,6 +586,9 @@ VOID _wfp_uninitialize (
 
 	if (is_full)
 	{
+		_InterlockedExchange8 (&config.is_safepause, FALSE);
+		_wfp_cancelsafepause_timer ();
+
 		_app_setprovidersecurity (engine_handle, &GUID_WfpProvider, FALSE);
 		_app_setsublayersecurity (engine_handle, &GUID_WfpSublayer, FALSE);
 
@@ -555,10 +706,21 @@ VOID _wfp_installfilters (
 
 	_r_queuedlock_acquireshared (&lock_apps);
 
-	while (_r_obj_enumhashtablepointer (apps_table, &ptr_app, NULL, &enum_key))
+	if (_wfp_issafepause ())
 	{
-		if (ptr_app->is_enabled)
-			_r_obj_addlistitem (rules, _r_obj_reference (ptr_app));
+		while (_r_obj_enumhashtablepointer (apps_table, &ptr_app, NULL, &enum_key))
+		{
+			if (_app_isappblocked (ptr_app))
+				_r_obj_addlistitem (rules, _r_obj_reference (ptr_app));
+		}
+	}
+	else
+	{
+		while (_r_obj_enumhashtablepointer (apps_table, &ptr_app, NULL, &enum_key))
+		{
+			if (ptr_app->is_enabled)
+				_r_obj_addlistitem (rules, _r_obj_reference (ptr_app));
+		}
 	}
 
 	_r_queuedlock_releaseshared (&lock_apps);
@@ -1657,7 +1819,40 @@ BOOLEAN _wfp_create3filters (
 	{
 		ptr_app = _r_obj_getlistitem (rules, i);
 
-		if (ptr_app && ptr_app->is_enabled)
+		if (!ptr_app)
+			continue;
+
+		if (_wfp_issafepause ())
+		{
+			if (_app_isappblocked (ptr_app))
+			{
+				// Skip missing files on disk during Safe Pause to avoid false error flags
+				if (ptr_app->type == DATA_APP_REGULAR && !_app_isappexists (ptr_app))
+					continue;
+
+				string = _app_getappdisplayname (ptr_app, TRUE);
+
+				if (!_wfp_createrulefilter (
+					engine_handle,
+					ptr_app->type,
+					_r_obj_getstring (string),
+					ptr_app->app_hash,
+					NULL,
+					NULL,
+					NULL,
+					FW_WEIGHT_APP,
+					FWP_ACTION_BLOCK,
+					0,
+					ptr_app->guids))
+				{
+					ptr_app->is_haveerrors = TRUE;
+				}
+
+				if (string)
+					_r_obj_dereference (string);
+			}
+		}
+		else if (ptr_app->is_enabled)
 		{
 			string = _app_getappdisplayname (ptr_app, TRUE);
 
@@ -2377,7 +2572,14 @@ BOOLEAN _wfp_create2filters (
 		);
 	}
 
-	action = _r_config_getboolean (L"BlockOutboundConnections", TRUE) ? FWP_ACTION_BLOCK : FWP_ACTION_PERMIT;
+	if (_wfp_issafepause ())
+	{
+		action = FWP_ACTION_PERMIT;
+	}
+	else
+	{
+		action = _r_config_getboolean (L"BlockOutboundConnections", TRUE) ? FWP_ACTION_BLOCK : FWP_ACTION_PERMIT;
+	}
 
 	// block outbound connection
 	if (action == FWP_ACTION_BLOCK)
