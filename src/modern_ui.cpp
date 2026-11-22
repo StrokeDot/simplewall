@@ -11,6 +11,7 @@
 #include <objbase.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <commdlg.h>
 #include <commoncontrols.h>
 #include <dwmapi.h>
 #include <tlhelp32.h>
@@ -49,6 +50,7 @@
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "version.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "wintrust.lib")
@@ -629,11 +631,13 @@ std::wstring FindBestScaledPng (const std::wstring &pkgRoot, const std::wstring 
 			else if (nameLow.find (L"unplated") != std::wstring::npos) score += 90;
 			if (nameLow.find (L"altform-lightunplated") != std::wstring::npos) score -= 45;
 			if (nameLow.find (L"contrast-") != std::wstring::npos) score -= 80;
-			if (nameLow.find (L"targetsize-48") != std::wstring::npos) score += 50;
-			else if (nameLow.find (L"targetsize-64") != std::wstring::npos) score += 45;
-			else if (nameLow.find (L"scale-200") != std::wstring::npos) score += 42;
-			else if (nameLow.find (L"targetsize-32") != std::wstring::npos) score += 35;
-			else if (nameLow.find (L"scale-150") != std::wstring::npos) score += 32;
+			if (nameLow.find (L"targetsize-256") != std::wstring::npos || nameLow.find (L"scale-400") != std::wstring::npos) score += 70;
+			else if (nameLow.find (L"targetsize-96") != std::wstring::npos || nameLow.find (L"targetsize-128") != std::wstring::npos) score += 62;
+			else if (nameLow.find (L"scale-200") != std::wstring::npos) score += 58;
+			else if (nameLow.find (L"targetsize-64") != std::wstring::npos) score += 54;
+			else if (nameLow.find (L"targetsize-48") != std::wstring::npos) score += 50;
+			else if (nameLow.find (L"scale-150") != std::wstring::npos) score += 40;
+			else if (nameLow.find (L"targetsize-32") != std::wstring::npos) score += 32;
 			else if (nameLow.find (L"scale-125") != std::wstring::npos) score += 25;
 			else if (nameLow.find (L"scale-100") != std::wstring::npos) score += 20;
 			else if (nameLow == ToLower (file)) score += 15;
@@ -734,25 +738,160 @@ std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path)
 	return {};
 }
 
+#pragma pack(push, 2)
+struct GrpIconDir
+{
+	WORD idReserved;
+	WORD idType;
+	WORD idCount;
+};
+struct GrpIconDirEntry
+{
+	BYTE bWidth;
+	BYTE bHeight;
+	BYTE bColorCount;
+	BYTE bReserved;
+	WORD wPlanes;
+	WORD wBitCount;
+	DWORD dwBytesInRes;
+	WORD nID;
+};
+#pragma pack(pop)
+
+struct FirstIconGroupCtx
+{
+	LPCWSTR name = nullptr;
+	std::wstring nameCopy;
+	bool found = false;
+};
+
+BOOL CALLBACK EnumFirstIconGroupProc (HMODULE, LPCWSTR, LPWSTR lpName, LONG_PTR lParam)
+{
+	auto *ctx = reinterpret_cast<FirstIconGroupCtx *>(lParam);
+	if (IS_INTRESOURCE (lpName))
+	{
+		ctx->name = lpName;
+	}
+	else
+	{
+		ctx->nameCopy = lpName;
+		ctx->name = ctx->nameCopy.c_str ();
+	}
+	ctx->found = true;
+	return FALSE; // stop after first icon group
+}
+
+std::wstring ExtractHighestResExeIconDataUrl (const std::wstring &path)
+{
+	HMODULE hMod = LoadLibraryExW (path.c_str (), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+	if (!hMod)
+		return {};
+
+	std::wstring result;
+	FirstIconGroupCtx ctx;
+	EnumResourceNamesW (hMod, RT_GROUP_ICON, EnumFirstIconGroupProc, reinterpret_cast<LONG_PTR>(&ctx));
+
+	if (ctx.found && ctx.name)
+	{
+		HRSRC hGrp = FindResourceW (hMod, ctx.name, RT_GROUP_ICON);
+		if (hGrp)
+		{
+			HGLOBAL hGrpData = LoadResource (hMod, hGrp);
+			DWORD grpSize = SizeofResource (hMod, hGrp);
+			if (hGrpData && grpSize >= sizeof (GrpIconDir))
+			{
+				const BYTE *raw = reinterpret_cast<const BYTE *>(LockResource (hGrpData));
+				const auto *dir = reinterpret_cast<const GrpIconDir *>(raw);
+				if (raw && dir->idType == 1 && dir->idCount > 0)
+				{
+					size_t maxCount = (grpSize - sizeof (GrpIconDir)) / sizeof (GrpIconDirEntry);
+					size_t count = (std::min)((size_t)dir->idCount, maxCount);
+					const auto *entries = reinterpret_cast<const GrpIconDirEntry *>(raw + sizeof (GrpIconDir));
+
+					int bestIdx = -1;
+					int bestScore = -1;
+					for (size_t i = 0; i < count; ++i)
+					{
+						int w = entries[i].bWidth ? (int)entries[i].bWidth : 256;
+						int h = entries[i].bHeight ? (int)entries[i].bHeight : 256;
+						int bpp = entries[i].wBitCount ? (int)entries[i].wBitCount : 32;
+						// Prefer largest native resolution (256px PNG > 128 > 64 > 48 > 32) and 32-bit alpha
+						int score = (std::min)(w, h) * 100 + bpp;
+						if (score > bestScore)
+						{
+							bestScore = score;
+							bestIdx = (int)i;
+						}
+					}
+
+					if (bestIdx >= 0)
+					{
+						const auto &best = entries[bestIdx];
+						HRSRC hIco = FindResourceW (hMod, MAKEINTRESOURCEW (best.nID), RT_ICON);
+						if (hIco)
+						{
+							HGLOBAL hIcoData = LoadResource (hMod, hIco);
+							DWORD icoSize = SizeofResource (hMod, hIco);
+							if (hIcoData && icoSize >= 16)
+							{
+								const BYTE *icoBytes = reinterpret_cast<const BYTE *>(LockResource (hIcoData));
+								if (icoBytes)
+								{
+									// Native PNG-encoded HD icon (256x256): return untouched original PNG bytes!
+									if (icoSize <= 524288 &&
+										icoBytes[0] == 0x89 && icoBytes[1] == 'P' && icoBytes[2] == 'N' && icoBytes[3] == 'G')
+									{
+										result = L"data:image/png;base64," + Base64Encode (icoBytes, icoSize);
+									}
+									else
+									{
+										int w = best.bWidth ? (int)best.bWidth : 256;
+										int h = best.bHeight ? (int)best.bHeight : 256;
+										HICON hIcon = CreateIconFromResourceEx (
+											const_cast<PBYTE>(icoBytes), icoSize, TRUE, 0x00030000, w, h, LR_DEFAULTCOLOR);
+										if (hIcon)
+										{
+											result = EncodeHIconToDataUrl (hIcon);
+											DestroyIcon (hIcon);
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	FreeLibrary (hMod);
+	return result;
+}
+
 std::wstring ExtractIconDataUrl (const std::wstring &path)
 {
 	if (path.empty ()) return {};
 
-	// 1. Prefer crisp native 48x48 transparent icon embedded directly in the executable (no background plate!)
+	// 1. Direct PE RT_GROUP_ICON extraction: pulls untouched native 256x256 HD transparent PNG icons!
+	std::wstring nativeHd = ExtractHighestResExeIconDataUrl (path);
+	if (!nativeHd.empty ())
+		return nativeHd;
+
+	// 2. For Microsoft Store / WindowsApps executables or packages without an embedded icon, load HD unplated Store PNG
+	std::wstring storeLogo = FindWindowsAppsLogoDataUrl (path);
+	if (!storeLogo.empty ())
+		return storeLogo;
+
+	// 3. Fallback to PrivateExtractIconsW 64x64 / 48x48
 	HICON hIcon = nullptr;
-	if (PrivateExtractIconsW (path.c_str (), 0, 48, 48, &hIcon, nullptr, 1, 0) >= 1 && hIcon)
+	if (PrivateExtractIconsW (path.c_str (), 0, 64, 64, &hIcon, nullptr, 1, 0) >= 1 && hIcon)
 	{
 		std::wstring result = EncodeHIconToDataUrl (hIcon);
 		DestroyIcon (hIcon);
 		if (!result.empty ()) return result;
 	}
 
-	// 2. For Microsoft Store / WindowsApps executables or packages without an embedded icon, load unplated Store PNG
-	std::wstring storeLogo = FindWindowsAppsLogoDataUrl (path);
-	if (!storeLogo.empty ())
-		return storeLogo;
-
-	// 3. Fallback to crisp 48x48 Shell ExtraLarge icon (full alpha transparency)
+	// 4. Fallback to crisp 48x48 Shell ExtraLarge icon (full alpha transparency)
 	SHFILEINFOW sfi = {};
 	if (SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_SYSICONINDEX))
 	{
@@ -771,7 +910,7 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 		}
 	}
 
-	// 4. Final fallback to standard 32x32 shell icon
+	// 5. Final fallback to standard 32x32 shell icon
 	RtlZeroMemory (&sfi, sizeof (sfi));
 	if (!SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_ICON | SHGFI_LARGEICON) || !sfi.hIcon)
 		return {};
@@ -779,6 +918,146 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 	std::wstring result = EncodeHIconToDataUrl (sfi.hIcon);
 	DestroyIcon (sfi.hIcon);
 	return result;
+}
+
+// ---- Persistent Custom Logos (%APPDATA%\Henry++\simplewall\logos\) ----
+
+std::mutex g_customLogoMutex;
+std::unordered_map<ULONG_PTR, std::wstring> g_customLogoCache;
+
+std::wstring GetCustomLogosDir ()
+{
+	static std::wstring cached;
+	if (!cached.empty ()) return cached;
+	PWSTR appData = nullptr;
+	if (SUCCEEDED (SHGetKnownFolderPath (FOLDERID_RoamingAppData, 0, nullptr, &appData)) && appData)
+	{
+		std::wstring dir = std::wstring (appData) + L"\\Henry++\\simplewall\\logos";
+		CoTaskMemFree (appData);
+		SHCreateDirectoryExW (nullptr, dir.c_str (), nullptr);
+		cached = dir;
+	}
+	return cached;
+}
+
+std::wstring MimeTypeForExt (const std::wstring &ext)
+{
+	std::wstring low = ToLower (ext);
+	if (low == L"svg") return L"image/svg+xml";
+	if (low == L"webp") return L"image/webp";
+	if (low == L"jpg" || low == L"jpeg") return L"image/jpeg";
+	return L"image/png";
+}
+
+std::wstring GetCustomLogoDataUrl (ULONG_PTR appHash, bool *outHasCustom = nullptr)
+{
+	if (outHasCustom) *outHasCustom = false;
+	if (!appHash) return {};
+
+	{
+		std::lock_guard<std::mutex> lock (g_customLogoMutex);
+		auto it = g_customLogoCache.find (appHash);
+		if (it != g_customLogoCache.end ())
+		{
+			if (outHasCustom) *outHasCustom = !it->second.empty ();
+			return it->second;
+		}
+	}
+
+	std::wstring dir = GetCustomLogosDir ();
+	std::wstring dataUrl;
+	if (!dir.empty ())
+	{
+		const wchar_t *exts[] = { L"png", L"webp", L"svg", L"jpg" };
+		for (const wchar_t *ext : exts)
+		{
+			std::wstring fp = dir + L"\\" + std::to_wstring (appHash) + L"." + ext;
+			HANDLE h = CreateFileW (fp.c_str (), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (h != INVALID_HANDLE_VALUE)
+			{
+				LARGE_INTEGER sz = {};
+				if (GetFileSizeEx (h, &sz) && sz.QuadPart > 0 && sz.QuadPart <= 2 * 1024 * 1024)
+				{
+					std::vector<BYTE> buf ((size_t)sz.QuadPart);
+					DWORD rd = 0;
+					if (ReadFile (h, buf.data (), (DWORD)buf.size (), &rd, nullptr) && rd > 0)
+					{
+						dataUrl = L"data:" + MimeTypeForExt (ext) + L";base64," + Base64Encode (buf.data (), rd);
+					}
+				}
+				CloseHandle (h);
+				if (!dataUrl.empty ()) break;
+			}
+		}
+	}
+
+	{
+		std::lock_guard<std::mutex> lock (g_customLogoMutex);
+		g_customLogoCache[appHash] = dataUrl;
+	}
+	if (outHasCustom) *outHasCustom = !dataUrl.empty ();
+	return dataUrl;
+}
+
+bool SaveCustomLogoBytes (ULONG_PTR appHash, const std::wstring &ext, const BYTE *data, size_t len)
+{
+	if (!appHash || !data || len == 0 || len > 2 * 1024 * 1024)
+		return false;
+
+	std::wstring dir = GetCustomLogosDir ();
+	if (dir.empty ()) return false;
+
+	// Remove any older custom logo with different extension
+	const wchar_t *exts[] = { L"png", L"webp", L"svg", L"jpg" };
+	for (const wchar_t *e : exts)
+	{
+		std::wstring oldFp = dir + L"\\" + std::to_wstring (appHash) + L"." + e;
+		DeleteFileW (oldFp.c_str ());
+	}
+
+	std::wstring normExt = ToLower (ext);
+	if (normExt == L"jpeg") normExt = L"jpg";
+	if (normExt != L"png" && normExt != L"webp" && normExt != L"svg" && normExt != L"jpg")
+		normExt = L"png";
+
+	std::wstring fp = dir + L"\\" + std::to_wstring (appHash) + L"." + normExt;
+	HANDLE h = CreateFileW (fp.c_str (), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h == INVALID_HANDLE_VALUE)
+		return false;
+
+	DWORD written = 0;
+	BOOL ok = WriteFile (h, data, (DWORD)len, &written, nullptr) && written == (DWORD)len;
+	CloseHandle (h);
+
+	if (!ok) return false;
+
+	std::wstring dataUrl = L"data:" + MimeTypeForExt (normExt) + L";base64," + Base64Encode (data, len);
+	{
+		std::lock_guard<std::mutex> lock (g_customLogoMutex);
+		g_customLogoCache[appHash] = std::move (dataUrl);
+	}
+	_modern_ui_notify_change ();
+	return true;
+}
+
+void DeleteCustomLogo (ULONG_PTR appHash)
+{
+	if (!appHash) return;
+	std::wstring dir = GetCustomLogosDir ();
+	if (!dir.empty ())
+	{
+		const wchar_t *exts[] = { L"png", L"webp", L"svg", L"jpg" };
+		for (const wchar_t *e : exts)
+		{
+			std::wstring fp = dir + L"\\" + std::to_wstring (appHash) + L"." + e;
+			DeleteFileW (fp.c_str ());
+		}
+	}
+	{
+		std::lock_guard<std::mutex> lock (g_customLogoMutex);
+		g_customLogoCache[appHash].clear ();
+	}
+	_modern_ui_notify_change ();
 }
 
 std::wstring GetMainAppIconDataUrl ()
@@ -1181,6 +1460,10 @@ std::wstring BuildFullSnapshotJson ()
 		if (sig.empty () && !meta.signature.empty ())
 			sig = meta.signature;
 
+		bool hasCustomLogo = false;
+		std::wstring customLogo = GetCustomLogoDataUrl (a.app_hash, &hasCustomLogo);
+		const std::wstring &finalIcon = hasCustomLogo ? customLogo : meta.iconDataUrl;
+
 		ss << L"{\"id\":\"" << a.app_hash << L"\""
 			<< L",\"name\":\"" << JsonEscape (name.empty () ? fileName : name) << L"\""
 			<< L",\"fileName\":\"" << JsonEscape (fileName) << L"\""
@@ -1199,7 +1482,8 @@ std::wstring BuildFullSnapshotJson ()
 			<< L",\"fileVersion\":\"" << JsonEscape (meta.fileVersion) << L"\""
 			<< L",\"parentApp\":\"" << JsonEscape (meta.parentApp) << L"\""
 			<< L",\"signature\":\"" << JsonEscape (sig) << L"\""
-			<< L",\"iconDataUrl\":\"" << JsonEscape (meta.iconDataUrl) << L"\""
+			<< L",\"iconDataUrl\":\"" << JsonEscape (finalIcon) << L"\""
+			<< L",\"hasCustomLogo\":" << (hasCustomLogo ? L"true" : L"false")
 			<< L"}";
 	}
 
@@ -1478,6 +1762,7 @@ std::wstring BuildDiagnoseJson ()
 		std::wstring appIdStr;
 		std::wstring fwStatus = L"unlisted";
 		std::wstring displayName = fileName.empty () ? (L"PID " + std::to_wstring (c.pid)) : fileName;
+		std::wstring iconUrl = meta.iconDataUrl;
 
 		auto it = pathMap.find (ToLower (path));
 		if (it != pathMap.end ())
@@ -1485,6 +1770,8 @@ std::wstring BuildDiagnoseJson ()
 			appIdStr = std::to_wstring (it->second.id);
 			fwStatus = it->second.enabled ? L"allowed" : L"blocked";
 			if (!it->second.name.empty ()) displayName = it->second.name;
+			std::wstring custom = GetCustomLogoDataUrl (it->second.id);
+			if (!custom.empty ()) iconUrl = custom;
 		}
 
 		if (i > 0) ss << L",";
@@ -1496,7 +1783,7 @@ std::wstring BuildDiagnoseJson ()
 			<< L",\"company\":\"" << JsonEscape (meta.company) << L"\""
 			<< L",\"signature\":\"" << JsonEscape (meta.signature) << L"\""
 			<< L",\"parentApp\":\"" << JsonEscape (meta.parentApp) << L"\""
-			<< L",\"iconDataUrl\":\"" << JsonEscape (meta.iconDataUrl) << L"\""
+			<< L",\"iconDataUrl\":\"" << JsonEscape (iconUrl) << L"\""
 			<< L",\"proto\":\"" << JsonEscape (c.proto) << L"\""
 			<< L",\"state\":\"" << JsonEscape (c.state) << L"\""
 			<< L",\"localIp\":\"" << JsonEscape (c.localIp) << L"\""
@@ -1973,6 +2260,384 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 	}).detach ();
 }
 
+// ---- Online HD Transparent Logo Picker (homarr-labs/dashboard-icons + Local File Picker) ----
+
+struct LogoCatalogEntry
+{
+	std::wstring slug;
+	std::wstring searchText; // lowercase slug + aliases
+};
+
+std::mutex g_logoCatalogMutex;
+bool g_logoCatalogLoaded = false;
+std::vector<LogoCatalogEntry> g_logoCatalog;
+std::unordered_map<std::wstring, std::string> g_logoPreviewCache;
+
+bool EnsureLogoCatalogLoaded ()
+{
+	{
+		std::lock_guard<std::mutex> lock (g_logoCatalogMutex);
+		if (g_logoCatalogLoaded && !g_logoCatalog.empty ())
+			return true;
+	}
+
+	std::string body;
+	DWORD status = 0;
+	if (!WinHttpGetToBytes (L"https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/metadata.json", body, status, false) ||
+		status != 200 || body.size () < 1000)
+	{
+		return false;
+	}
+
+	// Parse top-level object keys (depth 1) and their aliases array
+	std::vector<LogoCatalogEntry> entries;
+	entries.reserve (4000);
+	int depth = 0;
+	bool inStr = false;
+	bool esc = false;
+	size_t n = body.size ();
+
+	for (size_t i = 0; i < n; ++i)
+	{
+		char c = body[i];
+		if (inStr)
+		{
+			if (esc) esc = false;
+			else if (c == '\\') esc = true;
+			else if (c == '"') inStr = false;
+			continue;
+		}
+
+		if (c == '{') { depth++; continue; }
+		if (c == '}') { if (depth > 0) depth--; continue; }
+
+		if (depth == 1 && c == '"')
+		{
+			size_t start = i + 1;
+			size_t j = start;
+			while (j < n && body[j] != '"')
+			{
+				if (body[j] == '\\' && j + 1 < n) j += 2;
+				else j++;
+			}
+			std::string key = body.substr (start, j - start);
+			i = j;
+
+			// Skip whitespace and verify ':' follows
+			size_t k = j + 1;
+			while (k < n && (body[k] == ' ' || body[k] == '\t' || body[k] == '\r' || body[k] == '\n')) k++;
+			if (k < n && body[k] == ':' && !key.empty ())
+			{
+				LogoCatalogEntry e;
+				e.slug = Utf8ToWide (key);
+				e.searchText = ToLower (e.slug);
+
+				// Peek ahead within this entry for "aliases":[...]
+				size_t entryStart = k + 1;
+				size_t aliasPos = body.find ("\"aliases\"", entryStart);
+				size_t nextObj = body.find ("\"update\"", entryStart);
+				if (aliasPos != std::string::npos && (nextObj == std::string::npos || aliasPos < nextObj))
+				{
+					size_t b1 = body.find ('[', aliasPos);
+					size_t b2 = (b1 != std::string::npos) ? body.find (']', b1) : std::string::npos;
+					if (b1 != std::string::npos && b2 != std::string::npos && b2 - b1 < 512)
+					{
+						size_t p = b1 + 1;
+						while (p < b2)
+						{
+							size_t q1 = body.find ('"', p);
+							if (q1 == std::string::npos || q1 >= b2) break;
+							size_t q2 = body.find ('"', q1 + 1);
+							if (q2 == std::string::npos || q2 >= b2) break;
+							e.searchText += L" " + ToLower (Utf8ToWide (body.substr (q1 + 1, q2 - q1 - 1)));
+							p = q2 + 1;
+						}
+					}
+				}
+				entries.push_back (std::move (e));
+			}
+		}
+		else if (c == '"')
+		{
+			inStr = true;
+		}
+	}
+
+	if (entries.empty ())
+		return false;
+
+	{
+		std::lock_guard<std::mutex> lock (g_logoCatalogMutex);
+		g_logoCatalog = std::move (entries);
+		g_logoCatalogLoaded = true;
+	}
+	return true;
+}
+
+bool FetchOnlineLogoPngBytes (const std::wstring &slug, std::string &outBytes)
+{
+	{
+		std::lock_guard<std::mutex> lock (g_logoCatalogMutex);
+		auto it = g_logoPreviewCache.find (slug);
+		if (it != g_logoPreviewCache.end ())
+		{
+			outBytes = it->second;
+			return !outBytes.empty ();
+		}
+	}
+
+	// Sanitize slug strictly (alphanumeric, hyphen, underscore only)
+	for (wchar_t c : slug)
+	{
+		if (!iswalnum (c) && c != L'-' && c != L'_')
+			return false;
+	}
+
+	std::wstring url = L"https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/png/" + slug + L".png";
+	DWORD status = 0;
+	std::string bytes;
+	if (!WinHttpGetToBytes (url, bytes, status, true) || status != 200 || bytes.size () < 64 ||
+		(BYTE)bytes[0] != 0x89 || bytes[1] != 'P' || bytes[2] != 'N' || bytes[3] != 'G')
+	{
+		return false;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock (g_logoCatalogMutex);
+		if (g_logoPreviewCache.size () < 200)
+			g_logoPreviewCache[slug] = bytes;
+	}
+	outBytes = std::move (bytes);
+	return true;
+}
+
+void RunSearchLogosAsync (ULONG_PTR appHash, std::wstring query)
+{
+	std::thread ([appHash, query = std::move (query)] () {
+		if (!EnsureLogoCatalogLoaded ())
+		{
+			std::wostringstream err;
+			err << L"{\"type\":\"logoSearchResult\",\"appId\":\"" << appHash
+				<< L"\",\"query\":\"" << JsonEscape (query)
+				<< L"\",\"error\":\"Could not reach logo catalog. Check your internet connection.\"}";
+			PostAsyncJsonFromWorker (err.str ());
+			return;
+		}
+
+		// Normalize query into lowercase search tokens
+		std::wstring qLow = ToLower (query);
+		std::vector<std::wstring> tokens;
+		std::wstring cur;
+		for (wchar_t c : qLow)
+		{
+			if (iswalnum (c))
+				cur.push_back (c);
+			else if (!cur.empty ())
+			{
+				if (cur != L"exe" && cur != L"app" && cur != L"bin" && cur != L"64" && cur != L"32")
+					tokens.push_back (cur);
+				cur.clear ();
+			}
+		}
+		if (!cur.empty () && cur != L"exe" && cur != L"app" && cur != L"bin")
+			tokens.push_back (cur);
+
+		// Compact hyphenated query too
+		std::wstring hyphenQ;
+		for (size_t i = 0; i < tokens.size (); ++i)
+		{
+			if (i > 0) hyphenQ.push_back (L'-');
+			hyphenQ += tokens[i];
+		}
+
+		struct Match { std::wstring slug; int score; };
+		std::vector<Match> matches;
+
+		{
+			std::lock_guard<std::mutex> lock (g_logoCatalogMutex);
+			for (const auto &entry : g_logoCatalog)
+			{
+				if (tokens.empty ())
+					break;
+
+				int score = 0;
+				if (!hyphenQ.empty ())
+				{
+					if (entry.slug == hyphenQ) score += 200;
+					else if (entry.slug.starts_with (hyphenQ)) score += 120;
+					else if (entry.searchText.find (hyphenQ) != std::wstring::npos) score += 80;
+				}
+
+				int tokHits = 0;
+				for (const auto &tok : tokens)
+				{
+					if (tok.size () < 2) continue;
+					if (entry.slug == tok) { score += 160; tokHits++; }
+					else if (entry.slug.starts_with (tok)) { score += 90; tokHits++; }
+					else if (entry.searchText.find (tok) != std::wstring::npos) { score += 45; tokHits++; }
+				}
+
+				if (score > 0 && tokHits > 0)
+				{
+					// Prefer shorter/canonical slugs (e.g., "opera" over "opera-mini-beta")
+					score -= (int)entry.slug.size ();
+					matches.push_back ({ entry.slug, score });
+				}
+			}
+		}
+
+		std::sort (matches.begin (), matches.end (), [] (const Match &a, const Match &b) {
+			return a.score > b.score;
+		});
+
+		size_t limit = (std::min)(matches.size (), (size_t)12);
+		std::vector<std::wstring> slugs;
+		slugs.reserve (limit);
+		for (size_t i = 0; i < limit; ++i)
+			slugs.push_back (matches[i].slug);
+
+		// Fetch thumbnails concurrently (up to 4 threads) so previews appear fast
+		std::vector<std::wstring> dataUrls (slugs.size ());
+		std::atomic<size_t> nextIdx{0};
+		size_t workerCount = (std::min)((size_t)4, slugs.size ());
+		std::vector<std::thread> workers;
+		for (size_t w = 0; w < workerCount; ++w)
+		{
+			workers.emplace_back ([&] () {
+				while (true)
+				{
+					size_t idx = nextIdx.fetch_add (1);
+					if (idx >= slugs.size ()) break;
+					std::string png;
+					if (FetchOnlineLogoPngBytes (slugs[idx], png))
+					{
+						dataUrls[idx] = L"data:image/png;base64," + Base64Encode (reinterpret_cast<const BYTE *>(png.data ()), png.size ());
+					}
+				}
+			});
+		}
+		for (auto &t : workers) t.join ();
+
+		std::wostringstream ss;
+		ss << L"{\"type\":\"logoSearchResult\",\"appId\":\"" << appHash
+			<< L"\",\"query\":\"" << JsonEscape (query)
+			<< L"\",\"items\":[";
+		bool first = true;
+		for (size_t i = 0; i < slugs.size (); ++i)
+		{
+			if (dataUrls[i].empty ()) continue;
+			if (!first) ss << L",";
+			first = false;
+			ss << L"{\"slug\":\"" << JsonEscape (slugs[i])
+				<< L"\",\"dataUrl\":\"" << JsonEscape (dataUrls[i]) << L"\"}";
+		}
+		ss << L"]}";
+		PostAsyncJsonFromWorker (ss.str ());
+	}).detach ();
+}
+
+void RunApplyOnlineLogoAsync (ULONG_PTR appHash, std::wstring slug)
+{
+	std::thread ([appHash, slug = std::move (slug)] () {
+		std::string png;
+		if (FetchOnlineLogoPngBytes (slug, png) &&
+			SaveCustomLogoBytes (appHash, L"png", reinterpret_cast<const BYTE *>(png.data ()), png.size ()))
+		{
+			WriteAuditLogLine (L"LOGO", L"Applied HD online logo: " + slug);
+			PostAsyncJsonFromWorker (L"{\"type\":\"logoApplied\",\"ok\":true,\"slug\":\"" + JsonEscape (slug) + L"\"}");
+		}
+		else
+		{
+			PostAsyncJsonFromWorker (L"{\"type\":\"logoApplied\",\"ok\":false,\"error\":\"Could not download or save logo.\"}");
+		}
+	}).detach ();
+}
+
+void PickCustomLogoFile (ULONG_PTR appHash)
+{
+	if (!appHash) return;
+
+	WCHAR fileBuf[MAX_PATH] = {};
+	OPENFILENAMEW ofn = {};
+	ofn.lStructSize = sizeof (ofn);
+	ofn.hwndOwner = g_hwnd;
+	ofn.lpstrFilter = L"Logo Images (*.png;*.ico;*.svg;*.webp;*.jpg)\0*.png;*.ico;*.svg;*.webp;*.jpg;*.jpeg\0All Files (*.*)\0*.*\0";
+	ofn.lpstrFile = fileBuf;
+	ofn.nMaxFile = MAX_PATH;
+	ofn.lpstrTitle = L"Choose Custom Program Logo";
+	ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+
+	if (!GetOpenFileNameW (&ofn))
+		return;
+
+	std::wstring chosen (fileBuf);
+	size_t dot = chosen.find_last_of (L'.');
+	std::wstring ext = (dot == std::wstring::npos) ? L"png" : ToLower (chosen.substr (dot + 1));
+
+	if (ext == L"ico")
+	{
+		// Load crisp 256x256 from .ico and convert to PNG via WIC
+		HICON hIco = (HICON)LoadImageW (nullptr, chosen.c_str (), IMAGE_ICON, 256, 256, LR_LOADFROMFILE);
+		if (!hIco)
+			hIco = (HICON)LoadImageW (nullptr, chosen.c_str (), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+		if (hIco)
+		{
+			IWICImagingFactory *factory = nullptr;
+			IWICBitmap *bmp = nullptr;
+			IStream *stream = nullptr;
+			IWICBitmapEncoder *enc = nullptr;
+			IWICBitmapFrameEncode *frame = nullptr;
+			HRESULT hr = CoCreateInstance (CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS (&factory));
+			if (SUCCEEDED (hr)) hr = factory->CreateBitmapFromHICON (hIco, &bmp);
+			if (SUCCEEDED (hr)) hr = CreateStreamOnHGlobal (nullptr, TRUE, &stream);
+			if (SUCCEEDED (hr)) hr = factory->CreateEncoder (GUID_ContainerFormatPng, nullptr, &enc);
+			if (SUCCEEDED (hr)) hr = enc->Initialize (stream, WICBitmapEncoderNoCache);
+			if (SUCCEEDED (hr)) hr = enc->CreateNewFrame (&frame, nullptr);
+			if (SUCCEEDED (hr)) hr = frame->Initialize (nullptr);
+			if (SUCCEEDED (hr)) hr = frame->WriteSource (bmp, nullptr);
+			if (SUCCEEDED (hr)) hr = frame->Commit ();
+			if (SUCCEEDED (hr)) hr = enc->Commit ();
+			if (SUCCEEDED (hr))
+			{
+				HGLOBAL hMem = nullptr;
+				if (SUCCEEDED (GetHGlobalFromStream (stream, &hMem)) && hMem)
+				{
+					SIZE_T sz = GlobalSize (hMem);
+					const BYTE *ptr = (const BYTE *)GlobalLock (hMem);
+					if (ptr && sz > 0)
+					{
+						SaveCustomLogoBytes (appHash, L"png", ptr, sz);
+						GlobalUnlock (hMem);
+					}
+				}
+			}
+			if (frame) frame->Release ();
+			if (enc) enc->Release ();
+			if (stream) stream->Release ();
+			if (bmp) bmp->Release ();
+			if (factory) factory->Release ();
+			DestroyIcon (hIco);
+		}
+		return;
+	}
+
+	HANDLE h = CreateFileW (chosen.c_str (), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h == INVALID_HANDLE_VALUE)
+		return;
+
+	LARGE_INTEGER sz = {};
+	if (GetFileSizeEx (h, &sz) && sz.QuadPart > 0 && sz.QuadPart <= 2 * 1024 * 1024)
+	{
+		std::vector<BYTE> buf ((size_t)sz.QuadPart);
+		DWORD rd = 0;
+		if (ReadFile (h, buf.data (), (DWORD)buf.size (), &rd, nullptr) && rd > 0)
+		{
+			SaveCustomLogoBytes (appHash, ext, buf.data (), rd);
+		}
+	}
+	CloseHandle (h);
+}
+
 // ---- Incoming message dispatcher (UI thread) ----
 
 void HandleWebMessage (const std::wstring &json)
@@ -2113,6 +2778,44 @@ void HandleWebMessage (const std::wstring &json)
 		{
 			ExtractJsonString (json, L"assetName", assetName);
 			RunInstallUpdateAsync (dlUrl, assetName);
+		}
+	}
+	else if (action == L"searchLogos")
+	{
+		std::wstring idStr, query;
+		if (ExtractJsonString (json, L"id", idStr) && ExtractJsonString (json, L"query", query))
+		{
+			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+			if (h && !query.empty ())
+				RunSearchLogosAsync (h, query);
+		}
+	}
+	else if (action == L"applyOnlineLogo")
+	{
+		std::wstring idStr, slug;
+		if (ExtractJsonString (json, L"id", idStr) && ExtractJsonString (json, L"slug", slug))
+		{
+			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+			if (h && !slug.empty ())
+				RunApplyOnlineLogoAsync (h, slug);
+		}
+	}
+	else if (action == L"pickCustomLogo")
+	{
+		std::wstring idStr;
+		if (ExtractJsonString (json, L"id", idStr))
+		{
+			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+			if (h) PickCustomLogoFile (h);
+		}
+	}
+	else if (action == L"resetCustomLogo")
+	{
+		std::wstring idStr;
+		if (ExtractJsonString (json, L"id", idStr))
+		{
+			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+			if (h) DeleteCustomLogo (h);
 		}
 	}
 }
@@ -2290,6 +2993,8 @@ void ShowFrontAlert ()
 	std::wstring fileName = ExtractFileName (a.path);
 	FileMeta meta = GetFileMeta (a.path, !a.path.empty ());
 	std::wstring sig = a.signature.empty () ? meta.signature : a.signature;
+	std::wstring customLogo = GetCustomLogoDataUrl (a.appHash);
+	const std::wstring &alertIcon = customLogo.empty () ? meta.iconDataUrl : customLogo;
 
 	MODERN_STATE_SNAPSHOT st = {};
 	_modern_bridge_get_state (&st);
@@ -2304,7 +3009,7 @@ void ShowFrontAlert ()
 		<< L",\"company\":\"" << JsonEscape (meta.company) << L"\""
 		<< L",\"description\":\"" << JsonEscape (meta.description) << L"\""
 		<< L",\"parentApp\":\"" << JsonEscape (meta.parentApp) << L"\""
-		<< L",\"iconDataUrl\":\"" << JsonEscape (meta.iconDataUrl) << L"\""
+		<< L",\"iconDataUrl\":\"" << JsonEscape (alertIcon) << L"\""
 		<< L",\"remoteAddr\":\"" << JsonEscape (a.remoteAddr) << L"\""
 		<< L",\"remotePort\":" << a.remotePort
 		<< L",\"protocol\":\"" << JsonEscape (a.protocol) << L"\""
