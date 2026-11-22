@@ -1332,10 +1332,11 @@ bool IsNewerVersion (const std::wstring &latest, const std::wstring &current)
 	return false;
 }
 
-bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &outStatus, bool isBinaryDownload = false)
+bool WinHttpGetToBytesOnce (const std::wstring &url, DWORD accessType, std::string &outBody, DWORD &outStatus, DWORD &outErr, bool isBinaryDownload)
 {
 	outBody.clear ();
 	outStatus = 0;
+	outErr = 0;
 
 	URL_COMPONENTS uc = {};
 	uc.dwStructSize = sizeof (uc);
@@ -1347,26 +1348,23 @@ bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &ou
 	uc.dwUrlPathLength = (DWORD)std::size (path);
 
 	if (!WinHttpCrackUrl (url.c_str (), (DWORD)url.size (), 0, &uc))
+	{
+		outErr = GetLastError ();
 		return false;
+	}
 
-	// Use WINHTTP_ACCESS_TYPE_NO_PROXY to avoid 5-15s Windows WPAD proxy auto-discovery stalls!
-	HINTERNET hSession = WinHttpOpen (L"SimpleWall-Personal/" APP_FORK_VERSION, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-	if (!hSession) return false;
+	HINTERNET hSession = WinHttpOpen (L"SimpleWall/" APP_FORK_VERSION, accessType, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+	if (!hSession)
+	{
+		outErr = GetLastError ();
+		return false;
+	}
 
-	// Snappy timeouts (resolve 4s, connect 6s, send 8s, receive 15s)
-	WinHttpSetTimeouts (hSession, 4000, 6000, 8000, 15000);
+	// Keep resolveTimeout = 0 so Windows DNS fallback never aborts prematurely on dual-stack/VPN networks
+	WinHttpSetTimeouts (hSession, 0, 12000, 15000, 30000);
 
 	DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
 	WinHttpSetOption (hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof (redirectPolicy));
-
-	DWORD http2 = WINHTTP_PROTOCOL_FLAG_HTTP2;
-	WinHttpSetOption (hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &http2, sizeof (http2));
-
-	if (!isBinaryDownload)
-	{
-		DWORD decomp = WINHTTP_DECOMPRESSION_FLAG_ALL;
-		WinHttpSetOption (hSession, WINHTTP_OPTION_DECOMPRESSION, &decomp, sizeof (decomp));
-	}
 
 	HINTERNET hConnect = WinHttpConnect (hSession, host, uc.nPort, 0);
 	HINTERNET hRequest = nullptr;
@@ -1380,6 +1378,12 @@ bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &ou
 
 	if (hRequest)
 	{
+		if (!isBinaryDownload)
+		{
+			DWORD decomp = WINHTTP_DECOMPRESSION_FLAG_ALL;
+			WinHttpSetOption (hRequest, WINHTTP_OPTION_DECOMPRESSION, &decomp, sizeof (decomp));
+		}
+
 		LPCWSTR acceptHdr = isBinaryDownload
 			? L"Accept: application/octet-stream\r\n"
 			: L"Accept: application/vnd.github+json\r\n";
@@ -1399,7 +1403,6 @@ bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &ou
 				outBody.reserve (contentLen);
 			}
 
-			// Fast 64 KB buffered read loop (no slow WinHttpQueryDataAvailable round-trips!)
 			std::vector<char> chunk (65536);
 			DWORD read = 0;
 			DWORD lastReportTick = GetTickCount ();
@@ -1425,12 +1428,38 @@ bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &ou
 			}
 			ok = true;
 		}
+		else
+		{
+			outErr = GetLastError ();
+		}
+	}
+	else
+	{
+		outErr = GetLastError ();
 	}
 
 	if (hRequest) WinHttpCloseHandle (hRequest);
 	if (hConnect) WinHttpCloseHandle (hConnect);
 	WinHttpCloseHandle (hSession);
 	return ok;
+}
+
+bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &outStatus, bool isBinaryDownload = false)
+{
+	DWORD err = 0;
+	// Try fast direct connection first (no WPAD delay)
+	if (WinHttpGetToBytesOnce (url, WINHTTP_ACCESS_TYPE_NO_PROXY, outBody, outStatus, err, isBinaryDownload))
+		return true;
+
+	// Fallback to system automatic proxy if direct failed
+	DWORD err2 = 0;
+	if (WinHttpGetToBytesOnce (url, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, outBody, outStatus, err2, isBinaryDownload))
+		return true;
+
+	WCHAR logBuf[256];
+	swprintf_s (logBuf, L"WinHTTP request failed (direct err=%lu, proxy err=%lu)", err, err2);
+	WriteAuditLogLine (L"UPDATE", logBuf);
+	return false;
 }
 
 void RunCheckUpdateAsync ()
