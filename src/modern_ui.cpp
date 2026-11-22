@@ -11,6 +11,7 @@
 #include <objbase.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <commoncontrols.h>
 #include <dwmapi.h>
 #include <tlhelp32.h>
 #include <wincodec.h>
@@ -574,11 +575,204 @@ std::wstring EncodeHIconToDataUrl (HICON hIcon)
 	return result;
 }
 
+std::wstring LoadPngFileAsDataUrl (const std::wstring &pngPath)
+{
+	HANDLE h = CreateFileW (pngPath.c_str (), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h == INVALID_HANDLE_VALUE)
+		return {};
+
+	LARGE_INTEGER sz = {};
+	std::wstring result;
+	if (GetFileSizeEx (h, &sz) && sz.QuadPart >= 64 && sz.QuadPart <= 262144)
+	{
+		std::vector<BYTE> buf ((size_t)sz.QuadPart);
+		DWORD read = 0;
+		if (ReadFile (h, buf.data (), (DWORD)buf.size (), &read, nullptr) && read >= 8 &&
+			buf[0] == 0x89 && buf[1] == 'P' && buf[2] == 'N' && buf[3] == 'G')
+		{
+			result = L"data:image/png;base64," + Base64Encode (buf.data (), read);
+		}
+	}
+	CloseHandle (h);
+	return result;
+}
+
+std::wstring FindBestScaledPng (const std::wstring &pkgRoot, const std::wstring &relLogo)
+{
+	if (relLogo.empty ()) return {};
+
+	std::wstring full = pkgRoot + L"\\" + relLogo;
+	size_t slash = full.find_last_of (L"\\/");
+	if (slash == std::wstring::npos) return {};
+
+	std::wstring dir = full.substr (0, slash);
+	std::wstring file = full.substr (slash + 1);
+	size_t dot = file.find_last_of (L'.');
+	std::wstring stem = (dot == std::wstring::npos) ? file : file.substr (0, dot);
+	std::wstring ext = (dot == std::wstring::npos) ? L".png" : file.substr (dot);
+
+	std::wstring bestPath;
+	int bestScore = -10000;
+
+	std::wstring pattern = dir + L"\\" + stem + L"*" + ext;
+	WIN32_FIND_DATAW fd = {};
+	HANDLE hFind = FindFirstFileW (pattern.c_str (), &fd);
+	if (hFind != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				continue;
+			std::wstring nameLow = ToLower (fd.cFileName);
+			int score = 0;
+			if (nameLow.find (L"altform-unplated") != std::wstring::npos) score += 120;
+			else if (nameLow.find (L"unplated") != std::wstring::npos) score += 90;
+			if (nameLow.find (L"altform-lightunplated") != std::wstring::npos) score -= 45;
+			if (nameLow.find (L"contrast-") != std::wstring::npos) score -= 80;
+			if (nameLow.find (L"targetsize-48") != std::wstring::npos) score += 50;
+			else if (nameLow.find (L"targetsize-64") != std::wstring::npos) score += 45;
+			else if (nameLow.find (L"scale-200") != std::wstring::npos) score += 42;
+			else if (nameLow.find (L"targetsize-32") != std::wstring::npos) score += 35;
+			else if (nameLow.find (L"scale-150") != std::wstring::npos) score += 32;
+			else if (nameLow.find (L"scale-125") != std::wstring::npos) score += 25;
+			else if (nameLow.find (L"scale-100") != std::wstring::npos) score += 20;
+			else if (nameLow == ToLower (file)) score += 15;
+
+			if (score > bestScore)
+			{
+				bestScore = score;
+				bestPath = dir + L"\\" + fd.cFileName;
+			}
+		} while (FindNextFileW (hFind, &fd));
+		FindClose (hFind);
+	}
+
+	if (!bestPath.empty ())
+		return LoadPngFileAsDataUrl (bestPath);
+
+	if (GetFileAttributesW (full.c_str ()) != INVALID_FILE_ATTRIBUTES)
+		return LoadPngFileAsDataUrl (full);
+
+	return {};
+}
+
+std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path)
+{
+	std::wstring low = ToLower (path);
+	const std::wstring marker = L"\\windowsapps\\";
+	size_t idx = low.find (marker);
+	if (idx == std::wstring::npos)
+		return {};
+
+	size_t pkgStart = idx + marker.size ();
+	size_t pkgEnd = path.find (L'\\', pkgStart);
+	std::wstring pkgRoot = (pkgEnd == std::wstring::npos) ? path : path.substr (0, pkgEnd);
+
+	// Parse AppxManifest.xml for Square44x44Logo (unplated transparent app-list icon) or Logo
+	std::wstring manifestPath = pkgRoot + L"\\AppxManifest.xml";
+	HANDLE h = CreateFileW (manifestPath.c_str (), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h != INVALID_HANDLE_VALUE)
+	{
+		LARGE_INTEGER sz = {};
+		std::string xml;
+		if (GetFileSizeEx (h, &sz) && sz.QuadPart > 0 && sz.QuadPart <= 262144)
+		{
+			xml.resize ((size_t)sz.QuadPart);
+			DWORD rd = 0;
+			if (ReadFile (h, xml.data (), (DWORD)xml.size (), &rd, nullptr))
+				xml.resize (rd);
+			else
+				xml.clear ();
+		}
+		CloseHandle (h);
+
+		if (!xml.empty ())
+		{
+			auto extractAttr = [&] (const char *attr) -> std::wstring {
+				size_t p = xml.find (attr);
+				if (p == std::string::npos) return {};
+				size_t q1 = xml.find ('"', p);
+				if (q1 == std::string::npos) return {};
+				size_t q2 = xml.find ('"', q1 + 1);
+				if (q2 == std::string::npos || q2 <= q1 + 1) return {};
+				return Utf8ToWide (xml.substr (q1 + 1, q2 - q1 - 1));
+			};
+
+			const char *attrs[] = { "Square44x44Logo=", "Square150x150Logo=" };
+			for (const char *a : attrs)
+			{
+				std::wstring rel = extractAttr (a);
+				if (!rel.empty ())
+				{
+					std::wstring data = FindBestScaledPng (pkgRoot, rel);
+					if (!data.empty ()) return data;
+				}
+			}
+
+			size_t t1 = xml.find ("<Logo>");
+			size_t t2 = (t1 != std::string::npos) ? xml.find ("</Logo>", t1 + 6) : std::string::npos;
+			if (t1 != std::string::npos && t2 != std::string::npos && t2 > t1 + 6)
+			{
+				std::wstring rel = Utf8ToWide (xml.substr (t1 + 6, t2 - (t1 + 6)));
+				std::wstring data = FindBestScaledPng (pkgRoot, rel);
+				if (!data.empty ()) return data;
+			}
+		}
+	}
+
+	// Direct fallbacks for Store packages
+	const wchar_t *fallbacks[] = {
+		L"assets\\appicon.png",
+		L"assets\\icon.png",
+		L"assets\\packagelogo.png"
+	};
+	for (const wchar_t *fb : fallbacks)
+	{
+		std::wstring data = FindBestScaledPng (pkgRoot, fb);
+		if (!data.empty ()) return data;
+	}
+	return {};
+}
+
 std::wstring ExtractIconDataUrl (const std::wstring &path)
 {
 	if (path.empty ()) return {};
 
+	// 1. Prefer crisp native 48x48 transparent icon embedded directly in the executable (no background plate!)
+	HICON hIcon = nullptr;
+	if (PrivateExtractIconsW (path.c_str (), 0, 48, 48, &hIcon, nullptr, 1, 0) >= 1 && hIcon)
+	{
+		std::wstring result = EncodeHIconToDataUrl (hIcon);
+		DestroyIcon (hIcon);
+		if (!result.empty ()) return result;
+	}
+
+	// 2. For Microsoft Store / WindowsApps executables or packages without an embedded icon, load unplated Store PNG
+	std::wstring storeLogo = FindWindowsAppsLogoDataUrl (path);
+	if (!storeLogo.empty ())
+		return storeLogo;
+
+	// 3. Fallback to crisp 48x48 Shell ExtraLarge icon (full alpha transparency)
 	SHFILEINFOW sfi = {};
+	if (SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_SYSICONINDEX))
+	{
+		IImageList *iml = nullptr;
+		if (SUCCEEDED (SHGetImageList (SHIL_EXTRALARGE, IID_PPV_ARGS (&iml))) && iml)
+		{
+			HICON hShellIcon = nullptr;
+			if (SUCCEEDED (iml->GetIcon (sfi.iIcon, ILD_TRANSPARENT, &hShellIcon)) && hShellIcon)
+			{
+				std::wstring result = EncodeHIconToDataUrl (hShellIcon);
+				DestroyIcon (hShellIcon);
+				iml->Release ();
+				if (!result.empty ()) return result;
+			}
+			iml->Release ();
+		}
+	}
+
+	// 4. Final fallback to standard 32x32 shell icon
+	RtlZeroMemory (&sfi, sizeof (sfi));
 	if (!SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_ICON | SHGFI_LARGEICON) || !sfi.hIcon)
 		return {};
 

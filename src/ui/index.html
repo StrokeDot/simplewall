@@ -419,9 +419,9 @@ html, body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 6px;
   padding: 8px 14px;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   border: 1px solid var(--border-strong);
   background: var(--bg-card);
   color: var(--text);
@@ -429,20 +429,54 @@ html, body {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), transform 90ms ease;
   white-space: nowrap;
 }
+.btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 .btn:hover:not(:disabled) { background: var(--bg-hover); }
+.btn:active:not(:disabled) { transform: translateY(0.5px); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25);
+}
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
-.btn-green { background: var(--green-soft); border-color: rgba(34,197,94,0.3); color: var(--green); }
-.btn-green:hover:not(:disabled) { background: var(--green); color: #fff; }
-.btn-amber { background: var(--amber-soft); border-color: rgba(245,158,11,0.35); color: var(--amber); }
-.btn-amber:hover:not(:disabled) { background: var(--amber); color: #111; }
-.btn-red { background: var(--red-soft); border-color: rgba(239,68,68,0.3); color: var(--red); }
-.btn-red:hover:not(:disabled) { background: var(--red); color: #fff; }
-.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-green {
+  background: var(--green-soft);
+  border-color: rgba(34, 197, 94, 0.34);
+  color: var(--green);
+}
+.btn-green:hover:not(:disabled) {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.28);
+}
+.btn-amber {
+  background: var(--amber-soft);
+  border-color: rgba(245, 158, 11, 0.36);
+  color: var(--amber);
+}
+.btn-amber:hover:not(:disabled) {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #111;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.26);
+}
+.btn-red {
+  background: var(--red-soft);
+  border-color: rgba(239, 68, 68, 0.34);
+  color: var(--red);
+}
+.btn-red:hover:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.28);
+}
+.btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
 
 /* Cards & Grids */
 .grid-4 {
@@ -540,32 +574,43 @@ html, body {
 .app-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: 14px;
+  padding: 11px 15px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 11px;
   cursor: pointer;
   min-width: 0;
   overflow: hidden;
-  transition: background var(--transition), border-color var(--transition);
+  transition: background var(--transition), border-color var(--transition), box-shadow var(--transition);
 }
 .app-row:hover { background: var(--bg-hover); border-color: var(--border-strong); }
 .app-row.selected { background: var(--bg-active); border-color: var(--accent); }
 
 .app-icon {
-  width: 34px; height: 34px;
-  border-radius: 8px;
+  width: 38px; height: 38px;
+  border-radius: 10px;
   background: var(--bg-input);
   border: 1px solid var(--border);
   display: grid; place-items: center;
   flex-shrink: 0;
   overflow: hidden;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-2);
 }
-.app-icon img { width: 24px; height: 24px; object-fit: contain; }
+.app-icon.has-logo {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+}
+.app-icon img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.22));
+}
 
 .app-main { flex: 1; min-width: 0; overflow: hidden; }
 .app-name-line {
@@ -600,15 +645,17 @@ html, body {
   gap: 5px;
   font-size: 11px;
   font-weight: 600;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: var(--radius-pill);
+  border: 1px solid transparent;
   white-space: nowrap;
+  letter-spacing: 0.01em;
 }
-.pill-green { background: var(--green-soft); color: var(--green); }
-.pill-red { background: var(--red-soft); color: var(--red); }
-.pill-amber { background: var(--amber-soft); color: var(--amber); }
-.pill-blue { background: var(--accent-soft); color: var(--accent); }
-.pill-muted { background: var(--bg-hover); color: var(--text-3); }
+.pill-green { background: var(--green-soft); color: var(--green); border-color: rgba(34, 197, 94, 0.24); }
+.pill-red { background: var(--red-soft); color: var(--red); border-color: rgba(239, 68, 68, 0.24); }
+.pill-amber { background: var(--amber-soft); color: var(--amber); border-color: rgba(245, 158, 11, 0.26); }
+.pill-blue { background: var(--accent-soft); color: var(--accent); border-color: rgba(59, 130, 246, 0.24); }
+.pill-muted { background: var(--bg-hover); color: var(--text-3); border-color: var(--border); }
 
 .row-actions {
   display: flex;
@@ -658,8 +705,9 @@ html, body {
   align-items: center;
   gap: 12px;
 }
-.inspector-hero .app-icon { width: 46px; height: 46px; border-radius: 11px; }
-.inspector-hero .app-icon img { width: 32px; height: 32px; }
+.inspector-hero .app-icon { width: 48px; height: 48px; border-radius: 12px; font-size: 18px; }
+.inspector-hero .app-icon.has-logo { background: transparent; border: none; border-radius: 0; overflow: visible; }
+.inspector-hero .app-icon img { width: 46px; height: 46px; }
 .inspector-name { font-size: 16px; font-weight: 700; word-break: break-word; }
 .inspector-file { font-size: 12px; color: var(--text-3); font-family: var(--mono); margin-top: 2px; }
 
@@ -793,7 +841,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.1</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.2</div>
       </div>
     </div>
 
@@ -896,7 +944,7 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.2.1',
+  appVersion: '4.2.2',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
@@ -1125,9 +1173,12 @@ function renderChrome() {
   }
 }
 
+const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+const ICON_BLOCK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>`;
+
 function appIconHtml(a) {
-  if (a.iconDataUrl) return `<div class="app-icon"><img src="${a.iconDataUrl}" alt=""></div>`;
-  const ch = (a.name || a.fileName || '?').trim().charAt(0).toUpperCase() || '?';
+  if (a && a.iconDataUrl) return `<div class="app-icon has-logo"><img src="${a.iconDataUrl}" alt=""></div>`;
+  const ch = ((a && (a.name || a.fileName)) || '?').trim().charAt(0).toUpperCase() || '?';
   return `<div class="app-icon">${esc(ch)}</div>`;
 }
 
@@ -1151,9 +1202,9 @@ function renderAppRow(a, mode) {
 
   let actionHtml = '';
   if (mode === 'allowed') {
-    actionHtml = `<button class="btn btn-sm btn-red" onclick="blockApp('${a.id}', event)">Block</button>`;
+    actionHtml = `<button class="btn btn-sm btn-red" onclick="blockApp('${a.id}', event)">${ICON_BLOCK}Block</button>`;
   } else if (mode === 'blocked') {
-    actionHtml = `<button class="btn btn-sm btn-green" onclick="allowApp('${a.id}', 0, event)">Allow</button>`;
+    actionHtml = `<button class="btn btn-sm btn-green" onclick="allowApp('${a.id}', 0, event)">${ICON_CHECK}Allow</button>`;
     if (!a.exists && !a.isSystem) {
       actionHtml += `<button class="btn btn-sm" onclick="event.stopPropagation(); deleteApps(['${a.id}'])">Remove</button>`;
     }
@@ -1362,13 +1413,14 @@ function renderActivityRow(ev) {
     if (isAppAllowed) {
       actionHtml = `<span class="pill pill-green">App Allowed</span>`;
     } else {
-      actionHtml = `<button class="btn btn-sm btn-green" onclick="allowApp('${ev.appId}', 0, event)">Allow</button>`;
+      actionHtml = `<button class="btn btn-sm btn-green" onclick="allowApp('${ev.appId}', 0, event)">${ICON_CHECK}Allow</button>`;
     }
   } else if (ev.appId && ev.isAllow) {
-    actionHtml = `<button class="btn btn-sm btn-red" onclick="blockApp('${ev.appId}', event)">Block</button>`;
+    actionHtml = `<button class="btn btn-sm btn-red" onclick="blockApp('${ev.appId}', event)">${ICON_BLOCK}Block</button>`;
   }
 
   return `<div class="app-row" onclick="${ev.appId ? `selectApp('${ev.appId}')` : ''}">
+    ${appIconHtml(app || { name })}
     <div class="app-main">
       <div class="app-name-line">
         ${badge}
@@ -1631,8 +1683,8 @@ function renderInspector() {
 
     <div class="inspector-actions">
       ${a.status === 'allowed'
-        ? `<button class="btn btn-red" onclick="blockApp('${a.id}')">Block Internet Access</button>`
-        : `<button class="btn btn-green" onclick="allowApp('${a.id}', 0)">Allow Internet Access</button>
+        ? `<button class="btn btn-red" onclick="blockApp('${a.id}')">${ICON_BLOCK}Block Internet Access</button>`
+        : `<button class="btn btn-green" onclick="allowApp('${a.id}', 0)">${ICON_CHECK}Allow Internet Access</button>
            <div class="action-row">
              <button class="btn btn-sm" onclick="allowApp('${a.id}', 600)">Allow 10m</button>
              <button class="btn btn-sm" onclick="allowApp('${a.id}', 1800)">Allow 30m</button>
@@ -1703,7 +1755,7 @@ function renderDiagnose() {
         <div class="app-sub"><strong>To:</strong> ${esc(dest)} &nbsp;·&nbsp; <strong>From:</strong> ${esc(origin)}</div>
       </div>
       <div class="row-actions">
-        ${c.appId && c.fwStatus === 'allowed' ? `<button class="btn btn-sm btn-red" onclick="blockApp('${c.appId}', event)">Block</button>` : ''}
+        ${c.appId && c.fwStatus === 'allowed' ? `<button class="btn btn-sm btn-red" onclick="blockApp('${c.appId}', event)">${ICON_BLOCK}Block</button>` : ''}
         ${c.path && c.path.includes(':\\') ? `<button class="btn btn-sm" onclick="event.stopPropagation(); send('openFolder', { path: '${esc(c.path).replace(/\\/g, '\\\\')}' })">Folder</button>` : ''}
       </div>
     </div>`;
