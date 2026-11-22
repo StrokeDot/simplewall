@@ -195,9 +195,11 @@ html, body {
 
 .segmented {
   display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
   background: var(--bg-input);
-  border-radius: 6px;
-  padding: 2px;
+  border-radius: 8px;
+  padding: 3px;
   border: 1px solid var(--border);
 }
 
@@ -205,11 +207,12 @@ html, body {
   border: none;
   background: transparent;
   color: var(--text-2);
-  padding: 4px 9px;
-  border-radius: 5px;
+  padding: 5px 11px;
+  border-radius: 6px;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   transition: all var(--transition);
 }
@@ -1011,7 +1014,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.7</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.8</div>
       </div>
     </div>
 
@@ -1114,7 +1117,7 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.2.7',
+  appVersion: '4.2.8',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
@@ -1721,10 +1724,10 @@ function renderAllowed() {
         <div class="page-title">Allowed Apps</div>
         <div class="page-sub">Programs permitted to access the internet, organized by company. Use <strong>Ask on Open</strong> to block an app silently in the background until you open it again.</div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
         <div class="segmented">
-          <button class="${state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=true;renderPage()">By Company</button>
-          <button class="${!state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=false;renderPage()">Flat List</button>
+          <button class="${state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=true;renderPage()">By Group</button>
+          <button class="${!state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=false;renderPage()">By List</button>
         </div>
         <button class="btn btn-primary" onclick="send('addApp')">+ Add App</button>
       </div>
@@ -1758,10 +1761,10 @@ function renderBlocked() {
         <div class="page-title">Blocked Apps</div>
         <div class="page-sub">Programs blocked from the internet — even while Safe Pause is active. <strong>Ask on Open</strong> apps stay quiet in the background and re-ask when you open them or their related app.</div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
         <div class="segmented">
-          <button class="${state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=true;renderPage()">By Company</button>
-          <button class="${!state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=false;renderPage()">Flat List</button>
+          <button class="${state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=true;renderPage()">By Group</button>
+          <button class="${!state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=false;renderPage()">By List</button>
         </div>
         <button class="btn" onclick="setPage('cleanup')">Clean Up Missing</button>
       </div>
