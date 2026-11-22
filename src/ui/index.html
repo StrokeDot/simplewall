@@ -1361,7 +1361,7 @@ function renderSettings() {
   if (state.updateStatus === 'checking') {
     updateBody = `<div style="font-size:13px;color:var(--accent)">Checking ${esc(state.forkRepo)} for updates...</div>`;
   } else if (state.updateStatus === 'downloading') {
-    updateBody = `<div style="font-size:13px;color:var(--amber)">Downloading and preparing update... SimpleWall will restart automatically.</div>`;
+    updateBody = `<div style="font-size:13px;color:var(--amber)">${esc(state.updateMessage || 'Downloading update...')}</div>`;
   } else if (state.updateStatus === 'error') {
     updateBody = `<div style="font-size:13px;color:var(--red)">${esc(state.updateMessage || 'Could not reach GitHub releases.')}</div>`;
   } else if (state.updateInfo) {
@@ -1787,7 +1787,8 @@ if (window.chrome && window.chrome.webview) {
         state.updateMessage = msg.error;
         showToast('Update failed: ' + msg.error);
       } else {
-        showToast(msg.message || 'Installing update...');
+        state.updateMessage = msg.message || 'Downloading update...';
+        if (msg.progress === 100) showToast(state.updateMessage);
       }
       if (state.page === 'settings') renderPage();
     }

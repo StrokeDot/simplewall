@@ -1330,7 +1330,7 @@ bool IsNewerVersion (const std::wstring &latest, const std::wstring &current)
 	return false;
 }
 
-bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &outStatus)
+bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &outStatus, bool isBinaryDownload = false)
 {
 	outBody.clear ();
 	outStatus = 0;
@@ -1347,11 +1347,24 @@ bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &ou
 	if (!WinHttpCrackUrl (url.c_str (), (DWORD)url.size (), 0, &uc))
 		return false;
 
-	HINTERNET hSession = WinHttpOpen (L"SimpleWall-Personal/" APP_FORK_VERSION, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+	// Use WINHTTP_ACCESS_TYPE_NO_PROXY to avoid 5-15s Windows WPAD proxy auto-discovery stalls!
+	HINTERNET hSession = WinHttpOpen (L"SimpleWall-Personal/" APP_FORK_VERSION, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 	if (!hSession) return false;
+
+	// Snappy timeouts (resolve 4s, connect 6s, send 8s, receive 15s)
+	WinHttpSetTimeouts (hSession, 4000, 6000, 8000, 15000);
 
 	DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
 	WinHttpSetOption (hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof (redirectPolicy));
+
+	DWORD http2 = WINHTTP_PROTOCOL_FLAG_HTTP2;
+	WinHttpSetOption (hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &http2, sizeof (http2));
+
+	if (!isBinaryDownload)
+	{
+		DWORD decomp = WINHTTP_DECOMPRESSION_FLAG_ALL;
+		WinHttpSetOption (hSession, WINHTTP_OPTION_DECOMPRESSION, &decomp, sizeof (decomp));
+	}
 
 	HINTERNET hConnect = WinHttpConnect (hSession, host, uc.nPort, 0);
 	HINTERNET hRequest = nullptr;
@@ -1365,22 +1378,48 @@ bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &ou
 
 	if (hRequest)
 	{
-		WinHttpAddRequestHeaders (hRequest, L"Accept: application/vnd.github+json\r\n", (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+		LPCWSTR acceptHdr = isBinaryDownload
+			? L"Accept: application/octet-stream\r\n"
+			: L"Accept: application/vnd.github+json\r\n";
+		WinHttpAddRequestHeaders (hRequest, acceptHdr, (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+
 		if (WinHttpSendRequest (hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
 			WinHttpReceiveResponse (hRequest, nullptr))
 		{
 			DWORD statusSize = sizeof (outStatus);
 			WinHttpQueryHeaders (hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &outStatus, &statusSize, WINHTTP_NO_HEADER_INDEX);
 
-			DWORD avail = 0;
-			while (WinHttpQueryDataAvailable (hRequest, &avail) && avail > 0)
+			DWORD contentLen = 0;
+			DWORD lenSz = sizeof (contentLen);
+			if (WinHttpQueryHeaders (hRequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &contentLen, &lenSz, WINHTTP_NO_HEADER_INDEX) &&
+				contentLen > 0 && contentLen < 64 * 1024 * 1024)
 			{
-				size_t oldSz = outBody.size ();
-				outBody.resize (oldSz + avail);
-				DWORD read = 0;
-				if (!WinHttpReadData (hRequest, outBody.data () + oldSz, avail, &read))
-					break;
-				outBody.resize (oldSz + read);
+				outBody.reserve (contentLen);
+			}
+
+			// Fast 64 KB buffered read loop (no slow WinHttpQueryDataAvailable round-trips!)
+			std::vector<char> chunk (65536);
+			DWORD read = 0;
+			DWORD lastReportTick = GetTickCount ();
+
+			while (WinHttpReadData (hRequest, chunk.data (), (DWORD)chunk.size (), &read) && read > 0)
+			{
+				outBody.append (chunk.data (), read);
+
+				if (isBinaryDownload && contentLen > 0)
+				{
+					DWORD nowTick = GetTickCount ();
+					if (nowTick - lastReportTick >= 120)
+					{
+						lastReportTick = nowTick;
+						int pct = (int)((outBody.size () * 100) / contentLen);
+						if (pct > 99) pct = 99;
+						std::wostringstream prog;
+						prog << L"{\"type\":\"updateInstallStatus\",\"progress\":" << pct
+							<< L",\"message\":\"Downloading update... " << pct << L"%\"}";
+						PostAsyncJsonFromWorker (prog.str ());
+					}
+				}
 			}
 			ok = true;
 		}
@@ -1468,7 +1507,8 @@ void RunCheckUpdateAsync ()
 
 void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 {
-	std::thread ([downloadUrl = std::move (downloadUrl), assetName = std::move (assetName)] () {
+	UNREFERENCED_PARAMETER (assetName);
+	std::thread ([downloadUrl = std::move (downloadUrl)] () {
 		std::wstring low = ToLower (downloadUrl);
 		if (!low.starts_with (L"https://github.com/" APP_FORK_OWNER L"/") &&
 			!low.starts_with (L"https://github.com/") &&
@@ -1479,18 +1519,21 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 			return;
 		}
 
+		PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"progress\":5,\"message\":\"Downloading update...\"}");
+
 		std::string bytes;
 		DWORD status = 0;
-		if (!WinHttpGetToBytes (downloadUrl, bytes, status) || status != 200 || bytes.size () < 32768)
+		if (!WinHttpGetToBytes (downloadUrl, bytes, status, true) || status != 200 || bytes.size () < 32768)
 		{
+			WriteAuditLogLine (L"UPDATE", L"Update download failed");
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Failed to download update package from GitHub.\"}");
 			return;
 		}
 
 		WCHAR tempDir[MAX_PATH] = {};
 		GetTempPathW (MAX_PATH, tempDir);
-		bool isZip = ToLower (assetName).ends_with (L".zip");
-		std::wstring dlPath = std::wstring (tempDir) + (isZip ? L"simplewall_update_pkg.zip" : L"simplewall_update_new.exe");
+		std::wstring dlPath = std::wstring (tempDir) + L"simplewall_update_new.exe";
+		std::wstring bakPath = std::wstring (tempDir) + L"simplewall_prev.exe.bak";
 
 		HANDLE hFile = CreateFileW (dlPath.c_str (), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 		if (hFile == INVALID_HANDLE_VALUE)
@@ -1505,45 +1548,48 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 
 		WCHAR selfPath[MAX_PATH] = {};
 		GetModuleFileNameW (nullptr, selfPath, MAX_PATH);
-		DWORD pid = GetCurrentProcessId ();
 
-		std::wstring scriptPath = std::wstring (tempDir) + L"simplewall_apply_update.ps1";
-		std::wostringstream ps;
-		ps << L"$ErrorActionPreference = 'Stop'\r\n"
-			<< L"try { Wait-Process -Id " << pid << L" -Timeout 20 -ErrorAction SilentlyContinue } catch {}\r\n"
-			<< L"Start-Sleep -Milliseconds 600\r\n"
-			<< L"$target = '" << selfPath << L"'\r\n"
-			<< L"$src = '" << dlPath << L"'\r\n";
+		// Instant native cmd.exe swapper (boots in ~15ms instead of 4000ms PowerShell CLR!)
+		std::wstring batPath = std::wstring (tempDir) + L"simplewall_apply_update.cmd";
+		std::wostringstream bat;
+		bat << L"@echo off\r\n"
+			<< L"set \"TARGET=" << selfPath << L"\"\r\n"
+			<< L"set \"SRC=" << dlPath << L"\"\r\n"
+			<< L"set \"BAK=" << bakPath << L"\"\r\n"
+			<< L"copy /y \"%TARGET%\" \"%BAK%\" >nul 2>&1\r\n"
+			<< L"set /a tries=0\r\n"
+			<< L":retry\r\n"
+			<< L"move /y \"%SRC%\" \"%TARGET%\" >nul 2>&1\r\n"
+			<< L"if errorlevel 1 (\r\n"
+			<< L"  set /a tries+=1\r\n"
+			<< L"  if %tries% GEQ 80 goto fail\r\n"
+			<< L"  ping -n 1 -w 100 127.0.0.1 >nul\r\n"
+			<< L"  goto retry\r\n"
+			<< L")\r\n"
+			<< L"start \"\" \"%TARGET%\"\r\n"
+			<< L"del \"%~f0\" >nul 2>&1\r\n"
+			<< L"exit /b 0\r\n"
+			<< L":fail\r\n"
+			<< L"start \"\" \"%TARGET%\"\r\n"
+			<< L"del \"%~f0\" >nul 2>&1\r\n";
 
-		if (isZip)
-		{
-			ps << L"$extDir = Join-Path $env:TEMP 'simplewall_update_extract'\r\n"
-				<< L"if (Test-Path $extDir) { Remove-Item $extDir -Recurse -Force }\r\n"
-				<< L"Expand-Archive -Path $src -DestinationPath $extDir -Force\r\n"
-				<< L"$exe = Get-ChildItem -Path $extDir -Filter 'simplewall.exe' -Recurse | Select-Object -First 1\r\n"
-				<< L"if (-not $exe) { exit 1 }\r\n"
-				<< L"$src = $exe.FullName\r\n";
-		}
+		std::wstring batText = bat.str ();
+		int ansiLen = WideCharToMultiByte (CP_ACP, 0, batText.data (), (int)batText.size (), nullptr, 0, nullptr, nullptr);
+		std::string batAnsi ((size_t)ansiLen, '\0');
+		WideCharToMultiByte (CP_ACP, 0, batText.data (), (int)batText.size (), batAnsi.data (), ansiLen, nullptr, nullptr);
 
-		ps << L"Copy-Item -Path $target -Destination ($target + '.bak') -Force -ErrorAction SilentlyContinue\r\n"
-			<< L"Copy-Item -Path $src -Destination $target -Force\r\n"
-			<< L"Start-Process -FilePath $target\r\n";
-
-		std::wstring psText = ps.str ();
-		int utf8Len = WideCharToMultiByte (CP_UTF8, 0, psText.data (), (int)psText.size (), nullptr, 0, nullptr, nullptr);
-		std::string psUtf8 ((size_t)utf8Len, '\0');
-		WideCharToMultiByte (CP_UTF8, 0, psText.data (), (int)psText.size (), psUtf8.data (), utf8Len, nullptr, nullptr);
-
-		HANDLE hScript = CreateFileW (scriptPath.c_str (), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+		HANDLE hScript = CreateFileW (batPath.c_str (), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 		if (hScript == INVALID_HANDLE_VALUE)
 		{
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Could not create updater script.\"}");
 			return;
 		}
-		WriteFile (hScript, psUtf8.data (), (DWORD)psUtf8.size (), &written, nullptr);
+		WriteFile (hScript, batAnsi.data (), (DWORD)batAnsi.size (), &written, nullptr);
 		CloseHandle (hScript);
 
-		std::wstring cmd = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + scriptPath + L"\"";
+		WriteAuditLogLine (L"UPDATE", L"Downloaded update cleanly, restarting to swap binary");
+
+		std::wstring cmd = L"cmd.exe /c \"" + batPath + L"\"";
 		STARTUPINFOW si = {};
 		si.cb = sizeof (si);
 		PROCESS_INFORMATION pi = {};
@@ -1551,7 +1597,7 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 		{
 			CloseHandle (pi.hThread);
 			CloseHandle (pi.hProcess);
-			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"message\":\"Update ready - restarting simplewall...\"}");
+			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"progress\":100,\"message\":\"Installing update & restarting...\"}");
 			if (g_hwnd && IsWindow (g_hwnd))
 				PostMessageW (g_hwnd, WM_MODERN_UI_EXIT_FOR_UPDATE, 0, 0);
 		}
