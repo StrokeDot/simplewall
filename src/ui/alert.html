@@ -468,18 +468,14 @@ function decide(decision, durationSeconds, reopen) {
   }
 
   setTimeout(() => {
-    frame.classList.add('closing');
-    setTimeout(() => {
-      send('animDone', { id: currentAlert ? currentAlert.id : '' });
-    }, 220);
-  }, 460);
+    send('animDone', { id: currentAlert ? currentAlert.id : '' });
+  }, 520);
 }
 
 function dismissAlert() {
   if (busy) return;
   busy = true;
-  document.getElementById('frame').classList.add('closing');
-  setTimeout(() => send('dismiss', { id: currentAlert ? currentAlert.id : '' }), 200);
+  send('dismiss', { id: currentAlert ? currentAlert.id : '' });
 }
 
 function renderAlert(a) {

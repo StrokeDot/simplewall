@@ -164,6 +164,16 @@ VOID _modern_bridge_set_mode (
 	_In_ LONG64 duration_seconds
 )
 {
+	WCHAR log_buf[160];
+	LPCWSTR mode_name = (mode == 1) ? L"Strict Protection" : ((mode == 2) ? L"Safe Pause" : L"Off");
+
+	if (mode == 2 && duration_seconds > 0)
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Switched firewall mode to %s (%lld minutes)", mode_name, duration_seconds / 60);
+	else
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Switched firewall mode to %s", mode_name);
+
+	_modern_ui_log_event (L"MODE", log_buf);
+
 	_wfp_setprotectionmode (hwnd, (ENUM_PROTECTION_MODE)mode, duration_seconds);
 	_modern_ui_notify_change ();
 }
@@ -211,6 +221,16 @@ VOID _modern_bridge_allow_app (
 	_app_listview_updateitemby_param (hwnd, app_hash, TRUE);
 	_app_profile_save (hwnd);
 
+	{
+		WCHAR log_buf[640];
+		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
+		if (duration_seconds > 0)
+			_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Allowed temporarily (%lldm): %s", duration_seconds / 60, p);
+		else
+			_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Allowed app: %s", p);
+		_modern_ui_log_event (L"ALLOW", log_buf);
+	}
+
 	_r_obj_dereference (ptr_app);
 
 	_modern_ui_notify_change ();
@@ -251,6 +271,13 @@ VOID _modern_bridge_block_app (
 
 	_app_listview_updateitemby_param (hwnd, app_hash, TRUE);
 	_app_profile_save (hwnd);
+
+	{
+		WCHAR log_buf[640];
+		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Blocked app: %s", p);
+		_modern_ui_log_event (L"BLOCK", log_buf);
+	}
 
 	_r_obj_dereference (ptr_app);
 
@@ -595,6 +622,13 @@ VOID _modern_bridge_notify_decision (
 	_app_listview_updateitemby_param (hwnd, app_hash, TRUE);
 	_app_profile_save (hwnd);
 
+	{
+		WCHAR log_buf[640];
+		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Alert decision (%s): %s", is_allow ? (reopen_app ? L"Allow & Reopen" : L"Allow") : L"Block", p);
+		_modern_ui_log_event (is_allow ? L"ALLOW" : L"BLOCK", log_buf);
+	}
+
 	_r_obj_dereference (ptr_app);
 
 	// Optional safe reopen for regular desktop apps
@@ -604,6 +638,32 @@ VOID _modern_bridge_notify_decision (
 	}
 
 	_modern_ui_notify_change ();
+}
+
+VOID _modern_bridge_get_diag (
+	_Out_ MODERN_DIAG_INFO *out_diag
+)
+{
+	WIN32_FILE_ATTRIBUTE_DATA fad;
+
+	RtlZeroMemory (out_diag, sizeof (*out_diag));
+
+	out_diag->wfp_installed = _wfp_isfiltersinstalled ();
+	out_diag->protection_mode = (INT)_wfp_getprotectionmode ();
+
+	if (profile_info.profile_path && !_r_obj_isstringempty (profile_info.profile_path))
+	{
+		_modern_copy_wstr (out_diag->profile_path, RTL_NUMBER_OF (out_diag->profile_path), profile_info.profile_path->buffer);
+
+		if (GetFileAttributesExW (profile_info.profile_path->buffer, GetFileExInfoStandard, &fad))
+		{
+			LARGE_INTEGER li;
+			li.HighPart = (LONG)fad.nFileSizeHigh;
+			li.LowPart = fad.nFileSizeLow;
+			out_diag->profile_exists = TRUE;
+			out_diag->profile_size = li.QuadPart;
+		}
+	}
 }
 
 VOID _modern_bridge_notify_dismiss (

@@ -1159,6 +1159,16 @@ INT_PTR CALLBACK SettingsProc (
 			break;
 		}
 
+		case WM_ERASEBKGND:
+		{
+			if (_modern_ui_paint_bg (hwnd, (HDC)wparam))
+			{
+				SetWindowLongPtrW (hwnd, DWLP_MSGRESULT, TRUE);
+				return TRUE;
+			}
+			break;
+		}
+
 		case WM_SIZE:
 		{
 			RECT rect;
@@ -2541,6 +2551,16 @@ INT_PTR CALLBACK DlgProc (
 
 			_r_wnd_sendmessage (hwnd, 0, WM_SIZE, 0, 0);
 
+			break;
+		}
+
+		case WM_ERASEBKGND:
+		{
+			if (_modern_ui_paint_bg (hwnd, (HDC)wparam))
+			{
+				SetWindowLongPtrW (hwnd, DWLP_MSGRESULT, TRUE);
+				return TRUE;
+			}
 			break;
 		}
 

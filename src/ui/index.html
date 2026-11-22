@@ -793,6 +793,10 @@ html, body {
       <span class="nav-label">Live Activity</span>
       <span class="nav-badge" id="navActivity">0</span>
     </button>
+    <button class="nav-item" data-page="diagnose">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      <span class="nav-label">System Diagnose</span>
+    </button>
     <button class="nav-item" data-page="settings">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       <span class="nav-label">Settings & Updates</span>
@@ -876,6 +880,8 @@ const state = {
   selectedAppId: null,
   cleanupSelected: new Set(),
   cleanupFilter: 'all',
+  diagnose: null,
+  diagnoseFilter: 'external',
   updateInfo: null,
   updateStatus: 'idle',
   updateMessage: ''
@@ -992,6 +998,7 @@ function setPage(page) {
   document.querySelectorAll('.nav-item').forEach(b => {
     b.classList.toggle('active', b.dataset.page === page);
   });
+  if (page === 'diagnose') send('getDiagnose');
   renderPage();
 }
 
@@ -1575,6 +1582,134 @@ function renderInspector() {
   `;
 }
 
+function renderDiagnose() {
+  const d = state.diagnose;
+  if (!d) {
+    return `
+      <div class="page-header">
+        <div>
+          <div class="page-title">System Diagnose</div>
+          <div class="page-sub">Scanning every active internet connection on your PC, where it came from, and system health...</div>
+        </div>
+        <button class="btn btn-primary" onclick="send('getDiagnose')">Run Scan</button>
+      </div>
+      <div class="empty"><div class="empty-title">Scanning live connections...</div>Checking TCP/UDP sockets, publishers, digital signatures, and firewall health.</div>
+    `;
+  }
+
+  const h = d.health || {};
+  const q = state.search.trim().toLowerCase();
+  const conns = (d.connections || []).filter(c => {
+    if (state.diagnoseFilter === 'external' && !c.isExternal) return false;
+    if (state.diagnoseFilter === 'connected' && c.state !== 'Connected' && c.state !== 'Connecting') return false;
+    if (state.diagnoseFilter === 'listening' && c.state !== 'Listening') return false;
+    if (q) {
+      const hay = `${c.name} ${c.fileName} ${c.company} ${c.signature} ${c.parentApp} ${c.path} ${c.remoteIp} ${c.proto}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const externalCount = (d.connections || []).filter(c => c.isExternal).length;
+  const connectedCount = (d.connections || []).filter(c => c.state === 'Connected').length;
+
+  const connRows = conns.map(c => {
+    const dest = c.remoteIp && c.remoteIp !== '*'
+      ? `${c.remoteIp}:${c.remotePort}${c.portLabel ? ' (' + c.portLabel + ')' : ''}`
+      : `Local port ${c.localPort}${c.portLabel ? ' (' + c.portLabel + ')' : ''}`;
+    const origin = [c.company || c.signature, c.parentApp].filter(Boolean).join(' · ') || c.path || 'System';
+    const fwPill = c.fwStatus === 'allowed'
+      ? `<span class="pill pill-green">Allowed</span>`
+      : (c.fwStatus === 'blocked' ? `<span class="pill pill-red">Blocked</span>` : `<span class="pill pill-muted">System / Unlisted</span>`);
+    const sigPill = c.signature
+      ? `<span class="pill pill-blue">Signed: ${esc(c.signature)}</span>`
+      : `<span class="pill pill-amber">Unsigned</span>`;
+
+    return `<div class="app-row" onclick="${c.appId ? `selectApp('${c.appId}')` : ''}">
+      ${appIconHtml(c)}
+      <div class="app-main">
+        <div class="app-name-line">
+          <span class="app-name">${esc(c.name || c.fileName)}</span>
+          <span class="pill ${c.state === 'Connected' ? 'pill-green' : 'pill-muted'}">${esc(c.proto)} · ${esc(c.state)}</span>
+          ${fwPill}
+          ${sigPill}
+        </div>
+        <div class="app-sub"><strong>To:</strong> ${esc(dest)} &nbsp;·&nbsp; <strong>From:</strong> ${esc(origin)}</div>
+      </div>
+      <div class="row-actions">
+        ${c.appId && c.fwStatus === 'allowed' ? `<button class="btn btn-sm btn-red" onclick="blockApp('${c.appId}', event)">Block</button>` : ''}
+        ${c.path && c.path.includes(':\\') ? `<button class="btn btn-sm" onclick="event.stopPropagation(); send('openFolder', { path: '${esc(c.path).replace(/\\/g, '\\\\')}' })">Folder</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const auditLines = d.auditLog || [];
+
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">System Diagnose</div>
+        <div class="page-sub">Live inspection of every active internet connection on your computer, where it came from, and your full action log.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="send('openAuditLog')">Open Log File</button>
+        <button class="btn btn-primary" onclick="send('getDiagnose')">Re-Scan Now</button>
+      </div>
+    </div>
+
+    <div class="grid-4">
+      <div class="card">
+        <div class="stat-label">Windows Firewall Engine (BFE)</div>
+        <div class="stat-val" style="font-size:20px;color:${h.bfeStatus==='Running'?'var(--green)':'var(--red)'}">${esc(h.bfeStatus || 'Unknown')}</div>
+        <div class="stat-hint">WFP Filters: ${h.wfpInstalled ? 'Installed & Active' : 'Not Installed'}</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Profile Storage</div>
+        <div class="stat-val" style="font-size:20px;color:${h.profileExists?'var(--green)':'var(--amber)'}">${h.profileExists ? 'Saved OK' : 'Fresh'}</div>
+        <div class="stat-hint">${h.profileSize ? Math.round(h.profileSize / 1024 * 10) / 10 + ' KB saved cleanly' : 'Will save on first change'}</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">External Connections</div>
+        <div class="stat-val" style="font-size:24px;color:var(--accent)">${externalCount}</div>
+        <div class="stat-hint">${connectedCount} active TCP connections total</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Alert Engine</div>
+        <div class="stat-val" style="font-size:20px;color:${h.alertReady?'var(--green)':'var(--amber)'}">${h.alertReady ? 'Ready' : 'Warming up'}</div>
+        <div class="stat-hint">Animated bottom-right alerts</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="toolbar-row" style="margin-bottom:10px">
+        <div>
+          <div style="font-weight:700;font-size:15px">Active Internet Connections & Origins</div>
+          <div style="font-size:12px;color:var(--text-2)">Every program currently connected to or listening on the network, where it lives, and who signed it</div>
+        </div>
+        <div class="chips">
+          <button class="chip ${state.diagnoseFilter==='external'?'active':''}" onclick="state.diagnoseFilter='external';renderPage()">External Internet (${externalCount})</button>
+          <button class="chip ${state.diagnoseFilter==='connected'?'active':''}" onclick="state.diagnoseFilter='connected';renderPage()">Connected (${connectedCount})</button>
+          <button class="chip ${state.diagnoseFilter==='listening'?'active':''}" onclick="state.diagnoseFilter='listening';renderPage()">Listening Ports</button>
+          <button class="chip ${state.diagnoseFilter==='all'?'active':''}" onclick="state.diagnoseFilter='all';renderPage()">All (${(d.connections||[]).length})</button>
+        </div>
+      </div>
+      ${conns.length ? `<div class="list">${connRows}</div>`
+        : `<div class="empty" style="padding:24px"><div class="empty-title">No matching connections right now</div>Click "All" or "Re-Scan Now" to see all active sockets.</div>`}
+    </div>
+
+    <div class="card">
+      <div class="toolbar-row" style="margin-bottom:8px">
+        <div>
+          <div style="font-weight:700;font-size:15px">Action & Error Audit Log</div>
+          <div style="font-size:12px;color:var(--text-2)">Saved automatically to ${esc(h.auditPath || 'AppData')}</div>
+        </div>
+        <button class="btn btn-sm" onclick="send('openAuditLog')">Open in Notepad</button>
+      </div>
+      <div class="release-notes" style="max-height:220px;font-family:var(--mono);font-size:11.5px">${auditLines.length ? esc(auditLines.join('\n')) : 'No audit entries yet.'}</div>
+    </div>
+  `;
+}
+
 function renderPage() {
   const el = document.getElementById('pageContent');
   if (state.page === 'overview') el.innerHTML = renderOverview();
@@ -1582,6 +1717,7 @@ function renderPage() {
   else if (state.page === 'blocked') el.innerHTML = renderBlocked();
   else if (state.page === 'cleanup') el.innerHTML = renderCleanup();
   else if (state.page === 'activity') el.innerHTML = renderActivity();
+  else if (state.page === 'diagnose') el.innerHTML = renderDiagnose();
   else if (state.page === 'settings') el.innerHTML = renderSettings();
 }
 
@@ -1633,6 +1769,9 @@ if (window.chrome && window.chrome.webview) {
       if (Array.isArray(msg.activity)) state.activity = msg.activity;
       renderChrome();
       if (state.page === 'activity' || state.page === 'overview') renderPage();
+    } else if (msg.type === 'diagnoseResult') {
+      state.diagnose = msg;
+      if (state.page === 'diagnose') renderPage();
     } else if (msg.type === 'updateResult') {
       if (msg.error) {
         state.updateStatus = 'error';

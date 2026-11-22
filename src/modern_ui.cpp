@@ -4,13 +4,18 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include <objbase.h>
 #include <shlobj.h>
 #include <shellapi.h>
 #include <dwmapi.h>
 #include <tlhelp32.h>
 #include <wincodec.h>
+#include <wincrypt.h>
+#include <mscat.h>
 #include <winhttp.h>
 #include <winver.h>
 
@@ -24,6 +29,7 @@
 #include <cctype>
 #include <cwctype>
 #include <deque>
+#include <fstream>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -43,6 +49,11 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "version.lib")
+#pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "wintrust.lib")
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 #ifndef WM_MODERN_UI_REFRESH
 #define WM_MODERN_UI_REFRESH (WM_APP + 23)
@@ -78,6 +89,7 @@ struct FileMeta
 	std::wstring productName;
 	std::wstring fileVersion;
 	std::wstring parentApp;
+	std::wstring signature;
 	std::wstring iconDataUrl;
 };
 
@@ -117,6 +129,92 @@ constexpr size_t kMaxActivity = 180;
 
 std::mutex g_metaMutex;
 std::unordered_map<std::wstring, FileMeta> g_metaCache;
+
+std::mutex g_auditMutex;
+
+std::wstring GetAuditLogPath ()
+{
+	static std::wstring cached;
+	if (!cached.empty ()) return cached;
+	PWSTR appData = nullptr;
+	if (SUCCEEDED (SHGetKnownFolderPath (FOLDERID_RoamingAppData, 0, nullptr, &appData)) && appData)
+	{
+		std::wstring dir = std::wstring (appData) + L"\\Henry++\\simplewall";
+		CoTaskMemFree (appData);
+		SHCreateDirectoryExW (nullptr, dir.c_str (), nullptr);
+		cached = dir + L"\\simplewall_audit.log";
+	}
+	return cached;
+}
+
+void WriteAuditLogLine (const std::wstring &level, const std::wstring &msg)
+{
+	std::wstring path = GetAuditLogPath ();
+	if (path.empty ()) return;
+
+	SYSTEMTIME st = {};
+	GetLocalTime (&st);
+	WCHAR ts[40];
+	swprintf_s (ts, L"%04u-%02u-%02u %02u:%02u:%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+	std::wstring line = L"[" + std::wstring (ts) + L"] [" + level + L"] " + msg + L"\r\n";
+
+	int utf8Len = WideCharToMultiByte (CP_UTF8, 0, line.data (), (int)line.size (), nullptr, 0, nullptr, nullptr);
+	if (utf8Len <= 0) return;
+	std::string utf8 ((size_t)utf8Len, '\0');
+	WideCharToMultiByte (CP_UTF8, 0, line.data (), (int)line.size (), utf8.data (), utf8Len, nullptr, nullptr);
+
+	std::lock_guard<std::mutex> lock (g_auditMutex);
+
+	WIN32_FILE_ATTRIBUTE_DATA fad = {};
+	if (GetFileAttributesExW (path.c_str (), GetFileExInfoStandard, &fad) && fad.nFileSizeLow > 5 * 1024 * 1024)
+	{
+		std::wstring oldPath = path + L".old";
+		MoveFileExW (path.c_str (), oldPath.c_str (), MOVEFILE_REPLACE_EXISTING);
+	}
+
+	HANDLE h = CreateFileW (path.c_str (), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h != INVALID_HANDLE_VALUE)
+	{
+		DWORD written = 0;
+		WriteFile (h, utf8.data (), (DWORD)utf8.size (), &written, nullptr);
+		CloseHandle (h);
+	}
+}
+
+std::vector<std::wstring> ReadRecentAuditLines (size_t maxLines)
+{
+	std::vector<std::wstring> lines;
+	std::wstring path = GetAuditLogPath ();
+	if (path.empty ()) return lines;
+
+	std::lock_guard<std::mutex> lock (g_auditMutex);
+	std::ifstream f (path, std::ios::binary);
+	if (!f) return lines;
+
+	std::deque<std::string> ring;
+	std::string s;
+	while (std::getline (f, s))
+	{
+		if (!s.empty () && s.back () == '\r') s.pop_back ();
+		if (s.empty ()) continue;
+		ring.push_back (s);
+		if (ring.size () > maxLines) ring.pop_front ();
+	}
+
+	// Return newest first
+	for (auto it = ring.rbegin (); it != ring.rend (); ++it)
+	{
+		int wlen = MultiByteToWideChar (CP_UTF8, 0, it->data (), (int)it->size (), nullptr, 0);
+		if (wlen > 0)
+		{
+			std::wstring w ((size_t)wlen, L'\0');
+			MultiByteToWideChar (CP_UTF8, 0, it->data (), (int)it->size (), w.data (), wlen);
+			lines.push_back (std::move (w));
+		}
+	}
+	return lines;
+}
 
 // ---- String & JSON helpers ----
 
@@ -516,6 +614,179 @@ std::wstring QueryVerString (const std::vector<BYTE> &verData, const wchar_t *la
 	return {};
 }
 
+// ---- Digital Signature Extractor (PE + Windows Catalog + Microsoft Store AppxSignature.p7x) ----
+
+std::wstring GetSignerNameFromMsgAndStore (HCERTSTORE hStore, HCRYPTMSG hMsg)
+{
+	if (!hStore || !hMsg) return {};
+
+	DWORD signerSize = 0;
+	if (!CryptMsgGetParam (hMsg, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signerSize) || signerSize == 0)
+		return {};
+
+	std::vector<BYTE> signerBuf (signerSize);
+	if (!CryptMsgGetParam (hMsg, CMSG_SIGNER_INFO_PARAM, 0, signerBuf.data (), &signerSize))
+		return {};
+
+	auto *pSigner = reinterpret_cast<PCMSG_SIGNER_INFO>(signerBuf.data ());
+	CERT_INFO certInfo = {};
+	certInfo.Issuer = pSigner->Issuer;
+	certInfo.SerialNumber = pSigner->SerialNumber;
+
+	PCCERT_CONTEXT pCert = CertFindCertificateInStore (
+		hStore,
+		X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+		0,
+		CERT_FIND_SUBJECT_CERT,
+		&certInfo,
+		nullptr
+	);
+
+	std::wstring result;
+	if (pCert)
+	{
+		WCHAR nameBuf[256] = {};
+		if (CertGetNameStringW (pCert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, nameBuf, (DWORD)std::size (nameBuf)) > 1)
+			result = Trim (nameBuf);
+		CertFreeCertificateContext (pCert);
+	}
+	return result;
+}
+
+std::wstring ExtractSignerFromFileObject (const std::wstring &filePath)
+{
+	HCERTSTORE hStore = nullptr;
+	HCRYPTMSG hMsg = nullptr;
+	DWORD encoding = 0, contentType = 0, formatType = 0;
+
+	BOOL ok = CryptQueryObject (
+		CERT_QUERY_OBJECT_FILE,
+		filePath.c_str (),
+		CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED | CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED,
+		CERT_QUERY_FORMAT_FLAG_BINARY,
+		0,
+		&encoding,
+		&contentType,
+		&formatType,
+		&hStore,
+		&hMsg,
+		nullptr
+	);
+
+	std::wstring signer;
+	if (ok)
+		signer = GetSignerNameFromMsgAndStore (hStore, hMsg);
+
+	if (hStore) CertCloseStore (hStore, 0);
+	if (hMsg) CryptMsgClose (hMsg);
+	return signer;
+}
+
+std::wstring ExtractSignerFromCatalog (const std::wstring &filePath)
+{
+	HANDLE hFile = CreateFileW (filePath.c_str (), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (hFile == INVALID_HANDLE_VALUE) return {};
+
+	HCATADMIN hCatAdmin = nullptr;
+	std::wstring signer;
+
+	if (CryptCATAdminAcquireContext2 (&hCatAdmin, nullptr, BCRYPT_SHA256_ALGORITHM, nullptr, 0))
+	{
+		DWORD hashSize = 0;
+		CryptCATAdminCalcHashFromFileHandle2 (hCatAdmin, hFile, &hashSize, nullptr, 0);
+		if (hashSize > 0)
+		{
+			std::vector<BYTE> hashBuf (hashSize);
+			if (CryptCATAdminCalcHashFromFileHandle2 (hCatAdmin, hFile, &hashSize, hashBuf.data (), 0))
+			{
+				HCATINFO hCatInfo = CryptCATAdminEnumCatalogFromHash (hCatAdmin, hashBuf.data (), hashSize, 0, nullptr);
+				if (hCatInfo)
+				{
+					CATALOG_INFO catInfo = {};
+					catInfo.cbStruct = sizeof (catInfo);
+					if (CryptCATCatalogInfoFromContext (hCatInfo, &catInfo, 0))
+					{
+						signer = ExtractSignerFromFileObject (catInfo.wszCatalogFile);
+					}
+					CryptCATAdminReleaseCatalogContext (hCatAdmin, hCatInfo, 0);
+				}
+			}
+		}
+		CryptCATAdminReleaseContext (hCatAdmin, 0);
+	}
+
+	CloseHandle (hFile);
+	return signer;
+}
+
+std::wstring ExtractSignerFromAppxP7x (const std::wstring &exePath)
+{
+	// Microsoft Store / MSIX packages store their package signature in <PackageRoot>\AppxSignature.p7x
+	std::wstring low = ToLower (exePath);
+	size_t idx = low.find (L"\\windowsapps\\");
+	if (idx == std::wstring::npos) return {};
+
+	size_t pkgStart = idx + wcslen (L"\\windowsapps\\");
+	size_t pkgEnd = exePath.find (L'\\', pkgStart);
+	if (pkgEnd == std::wstring::npos) return {};
+
+	std::wstring p7xPath = exePath.substr (0, pkgEnd) + L"\\AppxSignature.p7x";
+	HANDLE hFile = CreateFileW (p7xPath.c_str (), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (hFile == INVALID_HANDLE_VALUE) return {};
+
+	LARGE_INTEGER fileSize = {};
+	std::wstring signer;
+	if (GetFileSizeEx (hFile, &fileSize) && fileSize.QuadPart > 8 && fileSize.QuadPart < 2 * 1024 * 1024)
+	{
+		std::vector<BYTE> buf ((size_t)fileSize.QuadPart);
+		DWORD read = 0;
+		if (ReadFile (hFile, buf.data (), (DWORD)buf.size (), &read, nullptr) && read > 8)
+		{
+			// AppxSignature.p7x starts with 4-byte magic "PKCX" (0x50 0x4B 0x43 0x58) followed by DER PKCS#7 SignedData
+			size_t offset = (buf[0] == 'P' && buf[1] == 'K' && buf[2] == 'C' && buf[3] == 'X') ? 4 : 0;
+			CERT_BLOB blob = {};
+			blob.cbData = (DWORD)(read - offset);
+			blob.pbData = buf.data () + offset;
+
+			HCERTSTORE hStore = nullptr;
+			HCRYPTMSG hMsg = nullptr;
+			DWORD enc = 0, ctype = 0, ftype = 0;
+			if (CryptQueryObject (
+				CERT_QUERY_OBJECT_BLOB,
+				&blob,
+				CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED,
+				CERT_QUERY_FORMAT_FLAG_BINARY,
+				0,
+				&enc, &ctype, &ftype,
+				&hStore, &hMsg, nullptr))
+			{
+				signer = GetSignerNameFromMsgAndStore (hStore, hMsg);
+				if (hStore) CertCloseStore (hStore, 0);
+				if (hMsg) CryptMsgClose (hMsg);
+			}
+		}
+	}
+
+	CloseHandle (hFile);
+	return signer;
+}
+
+std::wstring ExtractFileSignature (const std::wstring &filePath)
+{
+	if (filePath.empty ()) return {};
+
+	// 1. Embedded Authenticode PE signature
+	std::wstring s = ExtractSignerFromFileObject (filePath);
+	if (!s.empty ()) return s;
+
+	// 2. Microsoft Store / MSIX AppxSignature.p7x
+	s = ExtractSignerFromAppxP7x (filePath);
+	if (!s.empty ()) return s;
+
+	// 3. Windows System Catalog (.cat)
+	return ExtractSignerFromCatalog (filePath);
+}
+
 FileMeta GetFileMeta (const std::wstring &path, bool exists)
 {
 	std::wstring key = ToLower (path);
@@ -565,6 +836,7 @@ FileMeta GetFileMeta (const std::wstring &path, bool exists)
 			}
 		}
 
+		meta.signature = ExtractFileSignature (path);
 		meta.iconDataUrl = ExtractIconDataUrl (path);
 	}
 
@@ -667,6 +939,9 @@ std::wstring BuildFullSnapshotJson ()
 		if (!first) ss << L",";
 		first = false;
 
+		if (sig.empty () && !meta.signature.empty ())
+			sig = meta.signature;
+
 		ss << L"{\"id\":\"" << a.app_hash << L"\""
 			<< L",\"name\":\"" << JsonEscape (name.empty () ? fileName : name) << L"\""
 			<< L",\"fileName\":\"" << JsonEscape (fileName) << L"\""
@@ -692,6 +967,314 @@ std::wstring BuildFullSnapshotJson ()
 	_modern_bridge_free_apps (apps);
 
 	ss << L"],\"activity\":" << BuildActivityArrayJson () << L"}";
+	return ss.str ();
+}
+
+// ---- System Diagnose & Active Internet Connections Scanner ----
+
+std::wstring GetBfeServiceStatus ()
+{
+	SC_HANDLE scm = OpenSCManagerW (nullptr, nullptr, SC_MANAGER_CONNECT);
+	if (!scm) return L"Unknown";
+	SC_HANDLE svc = OpenServiceW (scm, L"BFE", SERVICE_QUERY_STATUS);
+	std::wstring res = L"Not Found";
+	if (svc)
+	{
+		SERVICE_STATUS ss = {};
+		if (QueryServiceStatus (svc, &ss))
+		{
+			switch (ss.dwCurrentState)
+			{
+				case SERVICE_RUNNING: res = L"Running"; break;
+				case SERVICE_STOPPED: res = L"Stopped"; break;
+				case SERVICE_START_PENDING: res = L"Starting"; break;
+				default: res = L"Other"; break;
+			}
+		}
+		CloseServiceHandle (svc);
+	}
+	CloseServiceHandle (scm);
+	return res;
+}
+
+std::wstring TcpStateName (DWORD state)
+{
+	switch (state)
+	{
+		case MIB_TCP_STATE_LISTEN: return L"Listening";
+		case MIB_TCP_STATE_SYN_SENT: return L"Connecting";
+		case MIB_TCP_STATE_SYN_RCVD: return L"Syn Received";
+		case MIB_TCP_STATE_ESTAB: return L"Connected";
+		case MIB_TCP_STATE_FIN_WAIT1:
+		case MIB_TCP_STATE_FIN_WAIT2:
+		case MIB_TCP_STATE_CLOSING:
+		case MIB_TCP_STATE_LAST_ACK: return L"Closing";
+		case MIB_TCP_STATE_CLOSE_WAIT: return L"Close Wait";
+		case MIB_TCP_STATE_TIME_WAIT: return L"Time Wait";
+		default: return L"Closed";
+	}
+}
+
+std::wstring FriendlyPortLabel (UINT16 port)
+{
+	switch (port)
+	{
+		case 53: return L"DNS";
+		case 80: return L"HTTP";
+		case 123: return L"NTP";
+		case 443: return L"HTTPS";
+		case 445: return L"SMB";
+		case 993: return L"IMAPS";
+		case 3389: return L"RDP";
+		case 5353: return L"mDNS";
+		case 8080: return L"HTTP-Alt";
+		default: return L"";
+	}
+}
+
+bool IsExternalAddr (const std::wstring &ip)
+{
+	if (ip.empty () || ip == L"0.0.0.0" || ip == L"::" || ip == L"::1" || ip == L"*")
+		return false;
+	if (ip.starts_with (L"127.") || ip.starts_with (L"10.") || ip.starts_with (L"192.168.") || ip.starts_with (L"169.254.") || ip.starts_with (L"fe80:") || ip.starts_with (L"fc") || ip.starts_with (L"fd"))
+		return false;
+	return true;
+}
+
+std::wstring FormatIpV4 (DWORD addr)
+{
+	WCHAR buf[64] = {};
+	IN_ADDR in = {};
+	in.S_un.S_addr = addr;
+	InetNtopW (AF_INET, &in, buf, std::size (buf));
+	return buf;
+}
+
+std::wstring FormatIpV6 (const BYTE addr[16])
+{
+	WCHAR buf[64] = {};
+	InetNtopW (AF_INET6, addr, buf, std::size (buf));
+	return buf;
+}
+
+std::wstring BuildDiagnoseJson ()
+{
+	MODERN_DIAG_INFO diag = {};
+	_modern_bridge_get_diag (&diag);
+
+	// Map lowercase app path -> (id, status) from simplewall
+	MODERN_APP_SNAPSHOT *apps = nullptr;
+	SIZE_T appCount = 0;
+	_modern_bridge_get_apps (&apps, &appCount);
+	struct AppLookup { ULONG_PTR id; bool enabled; std::wstring name; };
+	std::unordered_map<std::wstring, AppLookup> pathMap;
+	for (SIZE_T i = 0; i < appCount; ++i)
+	{
+		std::wstring p = ToLower (apps[i].path);
+		if (!p.empty ())
+			pathMap[p] = { apps[i].app_hash, apps[i].is_enabled != FALSE, apps[i].name };
+	}
+	_modern_bridge_free_apps (apps);
+
+	// Cache PID -> exe path
+	std::unordered_map<DWORD, std::wstring> pidPath;
+	auto getPidPath = [&] (DWORD pid) -> std::wstring {
+		if (pid == 0) return L"System Idle";
+		if (pid == 4) return L"System";
+		auto it = pidPath.find (pid);
+		if (it != pidPath.end ()) return it->second;
+		std::wstring path;
+		HANDLE h = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+		if (h)
+		{
+			WCHAR buf[1024];
+			DWORD sz = (DWORD)std::size (buf);
+			if (QueryFullProcessImageNameW (h, 0, buf, &sz))
+				path.assign (buf, sz);
+			CloseHandle (h);
+		}
+		pidPath[pid] = path;
+		return path;
+	};
+
+	struct ConnEntry
+	{
+		DWORD pid = 0;
+		std::wstring proto;
+		std::wstring state;
+		std::wstring localIp;
+		UINT16 localPort = 0;
+		std::wstring remoteIp;
+		UINT16 remotePort = 0;
+	};
+	std::vector<ConnEntry> conns;
+
+	// TCP IPv4
+	{
+		DWORD sz = 0;
+		GetExtendedTcpTable (nullptr, &sz, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+		if (sz > 0)
+		{
+			std::vector<BYTE> buf (sz);
+			if (GetExtendedTcpTable (buf.data (), &sz, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR)
+			{
+				auto *tbl = reinterpret_cast<PMIB_TCPTABLE_OWNER_PID>(buf.data ());
+				for (DWORD i = 0; i < tbl->dwNumEntries; ++i)
+				{
+					const auto &r = tbl->table[i];
+					ConnEntry c;
+					c.pid = r.dwOwningPid;
+					c.proto = L"TCP";
+					c.state = TcpStateName (r.dwState);
+					c.localIp = FormatIpV4 (r.dwLocalAddr);
+					c.localPort = ntohs ((u_short)r.dwLocalPort);
+					c.remoteIp = (r.dwState == MIB_TCP_STATE_LISTEN) ? L"*" : FormatIpV4 (r.dwRemoteAddr);
+					c.remotePort = (r.dwState == MIB_TCP_STATE_LISTEN) ? 0 : ntohs ((u_short)r.dwRemotePort);
+					conns.push_back (std::move (c));
+				}
+			}
+		}
+	}
+
+	// TCP IPv6
+	{
+		DWORD sz = 0;
+		GetExtendedTcpTable (nullptr, &sz, TRUE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+		if (sz > 0)
+		{
+			std::vector<BYTE> buf (sz);
+			if (GetExtendedTcpTable (buf.data (), &sz, TRUE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR)
+			{
+				auto *tbl = reinterpret_cast<PMIB_TCP6TABLE_OWNER_PID>(buf.data ());
+				for (DWORD i = 0; i < tbl->dwNumEntries; ++i)
+				{
+					const auto &r = tbl->table[i];
+					ConnEntry c;
+					c.pid = r.dwOwningPid;
+					c.proto = L"TCPv6";
+					c.state = TcpStateName (r.dwState);
+					c.localIp = FormatIpV6 (r.ucLocalAddr);
+					c.localPort = ntohs ((u_short)r.dwLocalPort);
+					c.remoteIp = (r.dwState == MIB_TCP_STATE_LISTEN) ? L"*" : FormatIpV6 (r.ucRemoteAddr);
+					c.remotePort = (r.dwState == MIB_TCP_STATE_LISTEN) ? 0 : ntohs ((u_short)r.dwRemotePort);
+					conns.push_back (std::move (c));
+				}
+			}
+		}
+	}
+
+	// UDP IPv4
+	{
+		DWORD sz = 0;
+		GetExtendedUdpTable (nullptr, &sz, TRUE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+		if (sz > 0)
+		{
+			std::vector<BYTE> buf (sz);
+			if (GetExtendedUdpTable (buf.data (), &sz, TRUE, AF_INET, UDP_TABLE_OWNER_PID, 0) == NO_ERROR)
+			{
+				auto *tbl = reinterpret_cast<PMIB_UDPTABLE_OWNER_PID>(buf.data ());
+				for (DWORD i = 0; i < tbl->dwNumEntries; ++i)
+				{
+					const auto &r = tbl->table[i];
+					ConnEntry c;
+					c.pid = r.dwOwningPid;
+					c.proto = L"UDP";
+					c.state = L"Active";
+					c.localIp = FormatIpV4 (r.dwLocalAddr);
+					c.localPort = ntohs ((u_short)r.dwLocalPort);
+					c.remoteIp = L"*";
+					c.remotePort = 0;
+					conns.push_back (std::move (c));
+				}
+			}
+		}
+	}
+
+	// Sort: Connected external first, then Connected local, then Listening/UDP
+	std::stable_sort (conns.begin (), conns.end (), [] (const ConnEntry &a, const ConnEntry &b) {
+		auto rank = [] (const ConnEntry &c) {
+			if (c.state == L"Connected" && IsExternalAddr (c.remoteIp)) return 0;
+			if (c.state == L"Connected") return 1;
+			if (c.state == L"Connecting") return 2;
+			if (c.state == L"Listening") return 3;
+			return 4;
+		};
+		return rank (a) < rank (b);
+	});
+
+	std::wstring bfeStatus = GetBfeServiceStatus ();
+	auto auditLines = ReadRecentAuditLines (80);
+	std::wstring auditPath = GetAuditLogPath ();
+
+	std::wostringstream ss;
+	ss << L"{\"type\":\"diagnoseResult\""
+		<< L",\"health\":{"
+		<< L"\"wfpInstalled\":" << (diag.wfp_installed ? L"true" : L"false")
+		<< L",\"bfeStatus\":\"" << JsonEscape (bfeStatus) << L"\""
+		<< L",\"profilePath\":\"" << JsonEscape (diag.profile_path) << L"\""
+		<< L",\"profileExists\":" << (diag.profile_exists ? L"true" : L"false")
+		<< L",\"profileSize\":" << diag.profile_size
+		<< L",\"auditPath\":\"" << JsonEscape (auditPath) << L"\""
+		<< L",\"alertReady\":" << (g_alertReady.load () ? L"true" : L"false")
+		<< L"},\"connections\":[";
+
+	size_t maxOut = std::min<size_t> (conns.size (), 250);
+	for (size_t i = 0; i < maxOut; ++i)
+	{
+		const auto &c = conns[i];
+		std::wstring path = getPidPath (c.pid);
+		std::wstring fileName = ExtractFileName (path);
+		bool realFile = path.size () > 3 && path[1] == L':';
+		FileMeta meta = realFile ? GetFileMeta (path, true) : FileMeta{};
+		if (path == L"System")
+		{
+			meta.company = L"Microsoft Windows";
+			meta.parentApp = L"Windows Kernel";
+			meta.signature = L"Microsoft Windows";
+		}
+
+		std::wstring appIdStr;
+		std::wstring fwStatus = L"unlisted";
+		std::wstring displayName = fileName.empty () ? (L"PID " + std::to_wstring (c.pid)) : fileName;
+
+		auto it = pathMap.find (ToLower (path));
+		if (it != pathMap.end ())
+		{
+			appIdStr = std::to_wstring (it->second.id);
+			fwStatus = it->second.enabled ? L"allowed" : L"blocked";
+			if (!it->second.name.empty ()) displayName = it->second.name;
+		}
+
+		if (i > 0) ss << L",";
+		ss << L"{\"pid\":" << c.pid
+			<< L",\"appId\":\"" << appIdStr << L"\""
+			<< L",\"name\":\"" << JsonEscape (displayName) << L"\""
+			<< L",\"fileName\":\"" << JsonEscape (fileName) << L"\""
+			<< L",\"path\":\"" << JsonEscape (path) << L"\""
+			<< L",\"company\":\"" << JsonEscape (meta.company) << L"\""
+			<< L",\"signature\":\"" << JsonEscape (meta.signature) << L"\""
+			<< L",\"parentApp\":\"" << JsonEscape (meta.parentApp) << L"\""
+			<< L",\"iconDataUrl\":\"" << JsonEscape (meta.iconDataUrl) << L"\""
+			<< L",\"proto\":\"" << JsonEscape (c.proto) << L"\""
+			<< L",\"state\":\"" << JsonEscape (c.state) << L"\""
+			<< L",\"localIp\":\"" << JsonEscape (c.localIp) << L"\""
+			<< L",\"localPort\":" << c.localPort
+			<< L",\"remoteIp\":\"" << JsonEscape (c.remoteIp) << L"\""
+			<< L",\"remotePort\":" << c.remotePort
+			<< L",\"portLabel\":\"" << JsonEscape (FriendlyPortLabel (c.remotePort ? c.remotePort : c.localPort)) << L"\""
+			<< L",\"isExternal\":" << (IsExternalAddr (c.remoteIp) ? L"true" : L"false")
+			<< L",\"fwStatus\":\"" << fwStatus << L"\""
+			<< L"}";
+	}
+
+	ss << L"],\"auditLog\":[";
+	for (size_t i = 0; i < auditLines.size (); ++i)
+	{
+		if (i > 0) ss << L",";
+		ss << L"\"" << JsonEscape (auditLines[i]) << L"\"";
+	}
+	ss << L"]}";
+
 	return ss.str ();
 }
 
@@ -857,11 +1440,12 @@ void RunCheckUpdateAsync ()
 			if (ExtractJsonString (slice, L"browser_download_url", candidate))
 			{
 				std::wstring low = ToLower (candidate);
-				if (low.ends_with (L".exe") || low.ends_with (L".zip"))
+				bool isSetup = (low.find (L"setup") != std::wstring::npos);
+				if ((low.ends_with (L".exe") && !isSetup) || low.ends_with (L".zip"))
 				{
 					downloadUrl = candidate;
 					assetName = ExtractFileName (candidate);
-					if (low.ends_with (L".exe")) break; // prefer direct .exe
+					if (low.ends_with (L".exe") && !isSetup) break; // prefer direct simplewall.exe over installer
 				}
 			}
 			searchPos = urlKey + 22;
@@ -1097,6 +1681,16 @@ void HandleWebMessage (const std::wstring &json)
 		}
 		PostJsonToWebView (L"{\"type\":\"activityUpdate\",\"activity\":[]}");
 	}
+	else if (action == L"getDiagnose")
+	{
+		PostJsonToWebView (BuildDiagnoseJson ());
+	}
+	else if (action == L"openAuditLog")
+	{
+		std::wstring p = GetAuditLogPath ();
+		if (!p.empty ())
+			ShellExecuteW (g_hwnd, L"open", L"notepad.exe", p.c_str (), nullptr, SW_SHOWNORMAL);
+	}
 	else if (action == L"checkUpdate")
 	{
 		RunCheckUpdateAsync ();
@@ -1129,29 +1723,107 @@ std::wstring LoadEmbeddedResourceHtml (UINT resId)
 
 // ---- Bottom-right animated alert popup helpers ----
 
-void PositionAlertBottomRight ()
+// Smooth 60fps alert open/close window animation state
+constexpr UINT_PTR kAlertAnimTimerId = 77;
+int g_alertAnimDir = 0; // 1 = opening, -1 = closing, 0 = idle
+DWORD g_alertAnimStart = 0;
+int g_alertTargetX = 0;
+int g_alertTargetY = 0;
+int g_alertW = 432;
+int g_alertH = 282;
+int g_alertSlidePx = 18;
+
+void ComputeAlertTargetRect ()
 {
 	if (!g_alertHwnd || !IsWindow (g_alertHwnd))
 		return;
 
 	UINT dpi = GetDpiForWindow (g_alertHwnd);
 	if (dpi == 0) dpi = 96;
-	int w = MulDiv (432, (int)dpi, 96);
-	int h = MulDiv (282, (int)dpi, 96);
+	g_alertW = MulDiv (432, (int)dpi, 96);
+	g_alertH = MulDiv (282, (int)dpi, 96);
+	g_alertSlidePx = MulDiv (18, (int)dpi, 96);
 	int margin = MulDiv (16, (int)dpi, 96);
 
 	RECT wa = {};
 	SystemParametersInfoW (SPI_GETWORKAREA, 0, &wa, 0);
 
-	int x = wa.right - w - margin;
-	int y = wa.bottom - h - margin;
-
-	SetWindowPos (g_alertHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
+	g_alertTargetX = wa.right - g_alertW - margin;
+	g_alertTargetY = wa.bottom - g_alertH - margin;
 
 	if (g_alertController)
 	{
-		RECT rc = {0, 0, w, h};
+		RECT rc = {0, 0, g_alertW, g_alertH};
 		g_alertController->put_Bounds (rc);
+	}
+}
+
+void StartAlertAnim (bool opening)
+{
+	if (!g_alertHwnd || !IsWindow (g_alertHwnd))
+		return;
+
+	ComputeAlertTargetRect ();
+	g_alertAnimDir = opening ? 1 : -1;
+	g_alertAnimStart = GetTickCount ();
+
+	if (opening)
+	{
+		SetLayeredWindowAttributes (g_alertHwnd, 0, 0, LWA_ALPHA);
+		SetWindowPos (g_alertHwnd, HWND_TOPMOST, g_alertTargetX, g_alertTargetY + g_alertSlidePx, g_alertW, g_alertH, SWP_NOACTIVATE);
+		if (g_alertController)
+			g_alertController->put_IsVisible (TRUE);
+		ShowWindow (g_alertHwnd, SW_SHOWNOACTIVATE);
+	}
+
+	SetTimer (g_alertHwnd, kAlertAnimTimerId, 15, nullptr);
+}
+
+void StepAlertAnim ()
+{
+	if (!g_alertHwnd || g_alertAnimDir == 0)
+		return;
+
+	DWORD elapsed = GetTickCount () - g_alertAnimStart;
+	float dur = (g_alertAnimDir > 0) ? 210.0f : 220.0f;
+	float t = (float)elapsed / dur;
+	if (t > 1.0f) t = 1.0f;
+
+	float eased;
+	int curY;
+	BYTE alpha;
+
+	if (g_alertAnimDir > 0)
+	{
+		// Cubic ease-out slide up + fade in
+		float inv = 1.0f - t;
+		eased = 1.0f - inv * inv * inv;
+		curY = g_alertTargetY + (int)((1.0f - eased) * g_alertSlidePx);
+		alpha = (BYTE)(eased * 255.0f);
+	}
+	else
+	{
+		// Quadratic ease-in slide down + fade out
+		eased = t * t;
+		curY = g_alertTargetY + (int)(eased * g_alertSlidePx);
+		alpha = (BYTE)((1.0f - eased) * 255.0f);
+	}
+
+	SetLayeredWindowAttributes (g_alertHwnd, 0, alpha, LWA_ALPHA);
+	SetWindowPos (g_alertHwnd, HWND_TOPMOST, g_alertTargetX, curY, g_alertW, g_alertH, SWP_NOACTIVATE | SWP_NOSIZE);
+
+	if (t >= 1.0f)
+	{
+		KillTimer (g_alertHwnd, kAlertAnimTimerId);
+		int finishedDir = g_alertAnimDir;
+		g_alertAnimDir = 0;
+
+		if (finishedDir < 0)
+		{
+			ShowWindow (g_alertHwnd, SW_HIDE);
+			if (g_alertController)
+				g_alertController->put_IsVisible (FALSE);
+		}
 	}
 }
 
@@ -1162,15 +1834,15 @@ void ShowFrontAlert ()
 
 	if (g_alertQueue.empty ())
 	{
-		ShowWindow (g_alertHwnd, SW_HIDE);
-		if (g_alertController)
-			g_alertController->put_IsVisible (FALSE);
+		if (IsWindowVisible (g_alertHwnd))
+			StartAlertAnim (false);
 		return;
 	}
 
 	const auto &a = g_alertQueue.front ();
 	std::wstring fileName = ExtractFileName (a.path);
 	FileMeta meta = GetFileMeta (a.path, !a.path.empty ());
+	std::wstring sig = a.signature.empty () ? meta.signature : a.signature;
 
 	MODERN_STATE_SNAPSHOT st = {};
 	_modern_bridge_get_state (&st);
@@ -1181,7 +1853,7 @@ void ShowFrontAlert ()
 		<< L",\"name\":\"" << JsonEscape (a.name.empty () ? fileName : a.name) << L"\""
 		<< L",\"fileName\":\"" << JsonEscape (fileName) << L"\""
 		<< L",\"path\":\"" << JsonEscape (a.path) << L"\""
-		<< L",\"signature\":\"" << JsonEscape (a.signature) << L"\""
+		<< L",\"signature\":\"" << JsonEscape (sig) << L"\""
 		<< L",\"company\":\"" << JsonEscape (meta.company) << L"\""
 		<< L",\"description\":\"" << JsonEscape (meta.description) << L"\""
 		<< L",\"parentApp\":\"" << JsonEscape (meta.parentApp) << L"\""
@@ -1195,11 +1867,19 @@ void ShowFrontAlert ()
 		<< L",\"soundEnabled\":" << (st.sound ? L"true" : L"false")
 		<< L"}";
 
-	PositionAlertBottomRight ();
+	bool wasHidden = !IsWindowVisible (g_alertHwnd) || (g_alertAnimDir < 0);
+	ComputeAlertTargetRect ();
 	g_alertWebview->PostWebMessageAsJson (ss.str ().c_str ());
-	if (g_alertController)
-		g_alertController->put_IsVisible (TRUE);
-	ShowWindow (g_alertHwnd, SW_SHOWNOACTIVATE);
+
+	if (wasHidden)
+	{
+		StartAlertAnim (true);
+	}
+	else
+	{
+		SetLayeredWindowAttributes (g_alertHwnd, 0, 255, LWA_ALPHA);
+		SetWindowPos (g_alertHwnd, HWND_TOPMOST, g_alertTargetX, g_alertTargetY, g_alertW, g_alertH, SWP_NOACTIVATE);
+	}
 }
 
 void HandleAlertMessage (const std::wstring &json)
@@ -1290,6 +1970,13 @@ LRESULT CALLBACK AlertWndProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
 	{
 		case WM_MOUSEACTIVATE:
 			return MA_NOACTIVATE;
+		case WM_TIMER:
+			if (wparam == kAlertAnimTimerId)
+			{
+				StepAlertAnim ();
+				return 0;
+			}
+			break;
 		case WM_SIZE:
 			if (g_alertController)
 			{
@@ -1384,6 +2071,15 @@ public:
 			h->Release ();
 
 			g_alertController->put_IsVisible (FALSE);
+			{
+				ICoreWebView2Controller2 *ctrl2 = nullptr;
+				if (SUCCEEDED (g_alertController->QueryInterface (IID_PPV_ARGS (&ctrl2))) && ctrl2)
+				{
+					COREWEBVIEW2_COLOR bg = {255, 18, 24, 36};
+					ctrl2->put_DefaultBackgroundColor (bg);
+					ctrl2->Release ();
+				}
+			}
 			g_alertReady.store (true);
 
 			std::wstring html = LoadEmbeddedResourceHtml (IDR_MODERN_ALERT);
@@ -1413,7 +2109,7 @@ void InitAlertHostWindow (ICoreWebView2Environment *env)
 	}
 
 	g_alertHwnd = CreateWindowExW (
-		WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+		WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
 		L"SimpleWallModernAlertClass",
 		L"simplewall Alert",
 		WS_POPUP | WS_CLIPCHILDREN,
@@ -1521,7 +2217,20 @@ public:
 			g_webview->add_WebMessageReceived (msgHandler, &g_msgToken);
 			msgHandler->Release ();
 
-			// Hide old Win32 controls & menu bar now that WebView2 is ready
+			// Set WebView2 default background color to match Dark/Light theme (zero white flash!)
+			{
+				ICoreWebView2Controller2 *ctrl2 = nullptr;
+				if (SUCCEEDED (g_controller->QueryInterface (IID_PPV_ARGS (&ctrl2))) && ctrl2)
+				{
+					MODERN_STATE_SNAPSHOT st = {};
+					_modern_bridge_get_state (&st);
+					COREWEBVIEW2_COLOR bg = st.is_dark_theme ? COREWEBVIEW2_COLOR{255, 12, 16, 23} : COREWEBVIEW2_COLOR{255, 243, 246, 251};
+					ctrl2->put_DefaultBackgroundColor (bg);
+					ctrl2->Release ();
+				}
+			}
+
+			// Hide old Win32 controls & menu bar
 			_modern_bridge_hide_legacy_controls (g_hwnd);
 			g_active.store (true);
 
@@ -1600,7 +2309,10 @@ BOOLEAN _modern_ui_init (
 
 	g_hwnd = hwnd;
 
+	// Hide legacy Win32 controls IMMEDIATELY before first paint so the old UI never flashes!
+	_modern_bridge_hide_legacy_controls (hwnd);
 	_modern_ui_apply_titlebar_theme (hwnd);
+	WriteAuditLogLine (L"START", L"simplewall v" APP_FORK_VERSION L" started");
 
 	// Ensure a generous comfortable window size on first launch
 	RECT rc = {};
@@ -1867,6 +2579,42 @@ VOID _modern_ui_push_activity_raw (
 	}
 
 	_modern_ui_notify_change ();
+}
+
+VOID _modern_ui_log_event (
+	_In_ LPCWSTR level,
+	_In_ LPCWSTR message
+)
+{
+	if (!level || !message)
+		return;
+
+	WriteAuditLogLine (level, message);
+}
+
+BOOLEAN _modern_ui_paint_bg (
+	_In_ HWND hwnd,
+	_In_ HDC hdc
+)
+{
+	if (!g_initialized.load () || hwnd != g_hwnd || !hdc)
+		return FALSE;
+
+	MODERN_STATE_SNAPSHOT st = {};
+	_modern_bridge_get_state (&st);
+
+	RECT rc = {};
+	if (!GetClientRect (hwnd, &rc))
+		return FALSE;
+
+	HBRUSH br = CreateSolidBrush (st.is_dark_theme ? RGB (12, 16, 23) : RGB (243, 246, 251));
+	if (br)
+	{
+		FillRect (hdc, &rc, br);
+		DeleteObject (br);
+		return TRUE;
+	}
+	return FALSE;
 }
 
 } // extern "C"

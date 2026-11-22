@@ -170,6 +170,29 @@ VOID _modern_bridge_notify_decision (
 	_In_ BOOLEAN reopen_app
 );
 
+typedef struct _MODERN_DIAG_INFO
+{
+	WCHAR profile_path[520];
+	LONG64 profile_size;
+	BOOLEAN profile_exists;
+	BOOLEAN wfp_installed;
+	INT protection_mode;
+} MODERN_DIAG_INFO;
+
+VOID _modern_bridge_get_diag (
+	_Out_ MODERN_DIAG_INFO *out_diag
+);
+
+VOID _modern_ui_log_event (
+	_In_ LPCWSTR level,
+	_In_ LPCWSTR message
+);
+
+BOOLEAN _modern_ui_paint_bg (
+	_In_ HWND hwnd,
+	_In_ HDC hdc
+);
+
 VOID _modern_bridge_notify_dismiss (
 	_In_ ULONG_PTR app_hash
 );
