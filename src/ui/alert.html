@@ -258,6 +258,7 @@ html, body {
 }
 .pill-green { background: var(--green-soft); color: var(--green); }
 .pill-amber { background: var(--amber-soft); color: var(--amber); }
+.pill-blue { background: var(--blue-soft); color: var(--blue); }
 
 /* Details card */
 .details {
@@ -327,17 +328,32 @@ html, body {
 }
 .btn-reopen:hover { background: var(--blue); color: #fff; }
 .btn-block {
-  flex: 0.95;
+  flex: 1;
   background: var(--red-soft);
   border-color: rgba(239, 68, 68, 0.35);
   color: var(--red);
 }
 .btn-block:hover { background: var(--red); color: #fff; }
+.btn-standby {
+  flex: 1;
+  background: var(--amber-soft);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: var(--amber);
+}
+.btn-standby:hover { background: var(--amber); color: #111; }
+.btn-session {
+  flex: 1;
+  background: var(--blue-soft);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: var(--blue);
+}
+.btn-session:hover { background: var(--blue); color: #fff; }
 .btn-xs {
   padding: 4px 8px;
   font-size: 11.5px;
   color: var(--text-2);
 }
+.overlay-circle.amber { background: var(--amber-soft); color: var(--amber); border: 2px solid var(--amber); }
 
 /* Confirmation overlay */
 .overlay {
@@ -375,6 +391,7 @@ html, body {
       <div class="head-left">
         <span class="status-dot"></span>
         <span class="head-title" id="headTitle">Connection Blocked</span>
+        <span class="pill pill-blue" id="wakePill" style="display:none"></span>
         <span class="queue-pill" id="queuePill" style="display:none">1 of 1</span>
       </div>
       <div class="head-btns">
@@ -408,7 +425,11 @@ html, body {
       <div class="btn-row">
         <button class="btn btn-allow" onclick="decide('allow', 0, false)">✓ Allow</button>
         <button class="btn btn-reopen" id="btnReopen" onclick="decide('allow', 0, true)" title="Allow internet and restart this app so it connects right away">↻ Allow & Reopen</button>
-        <button class="btn btn-block" onclick="decide('block', 0, false)">✕ Block</button>
+        <button class="btn btn-block" onclick="decide('block', 0, false)" title="Block permanently and never ask again">✕ Always Block</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-session btn-xs" style="padding:6px 9px;font-size:12px" onclick="decide('allow_until_closed', 0, false)" title="Allow internet for this session, then return to Ask on Open when closed">⏱ Allow Until Closed</button>
+        <button class="btn btn-standby btn-xs" style="padding:6px 9px;font-size:12px" onclick="decide('ask_on_use', 0, false)" title="Block silently in background now, and ask again next time you open it">Ask on Open</button>
       </div>
       <div class="btn-row" style="justify-content:space-between">
         <div style="display:flex;gap:5px;align-items:center">
@@ -461,14 +482,22 @@ function decide(decision, durationSeconds, reopen) {
   const oIcon = document.getElementById('overlayIcon');
   const oText = document.getElementById('overlayText');
 
-  if (decision === 'allow') {
+  if (decision === 'allow' || decision === 'allow_until_closed') {
     frame.classList.add('state-allowed');
     document.getElementById('headTitle').textContent = 'Connection Allowed';
     oIcon.className = 'overlay-circle ok';
     oIcon.textContent = '✓';
-    oText.textContent = reopen ? 'Allowed & Reopening...' : (durationSeconds ? `Allowed for ${Math.round(durationSeconds/60)}m` : 'Allowed!');
+    if (decision === 'allow_until_closed') oText.textContent = 'Allowed Until Closed';
+    else oText.textContent = reopen ? 'Allowed & Reopening...' : (durationSeconds ? `Allowed for ${Math.round(durationSeconds/60)}m` : 'Allowed!');
     overlay.classList.add('show');
-    send('decide', { id: currentAlert.id, decision: 'allow', durationSeconds, reopen });
+    send('decide', { id: currentAlert.id, decision, durationSeconds, reopen });
+  } else if (decision === 'ask_on_use') {
+    frame.classList.add('state-blocked');
+    oIcon.className = 'overlay-circle amber';
+    oIcon.textContent = '⏱';
+    oText.textContent = 'Blocked Until Reopened';
+    overlay.classList.add('show');
+    send('decide', { id: currentAlert.id, decision: 'ask_on_use', durationSeconds: 0, reopen: false });
   } else {
     frame.classList.add('state-blocked');
     oIcon.className = 'overlay-circle no';
@@ -498,7 +527,15 @@ function renderAlert(a) {
   const frame = document.getElementById('frame');
   frame.className = 'frame';
   document.getElementById('overlay').classList.remove('show');
-  document.getElementById('headTitle').textContent = 'Connection Blocked';
+  document.getElementById('headTitle').textContent = a.isAskOnUse ? 'App Opened — Authorize?' : 'Connection Blocked';
+
+  const wakePill = document.getElementById('wakePill');
+  if (a.wakeSource) {
+    wakePill.textContent = `Opened via ${a.wakeSource}`;
+    wakePill.style.display = '';
+  } else {
+    wakePill.style.display = 'none';
+  }
 
   const iconEl = document.getElementById('appIcon');
   if (a.iconDataUrl) {

@@ -78,6 +78,8 @@ typedef enum _ENUM_INFO_DATA
 	INFO_IS_READONLY,
 	INFO_IS_SILENT,
 	INFO_IS_UNDELETABLE,
+	INFO_IS_ASK_ON_USE,
+	INFO_WAKE_TRIGGER,
 } ENUM_INFO_DATA;
 
 typedef enum _ENUM_INFO_DATA2
@@ -281,6 +283,7 @@ typedef struct _ITEM_APP
 	PR_STRING real_path;
 	PR_STRING comment;
 	PR_STRING hash;
+	PR_STRING wake_trigger;
 
 	PVOID notification; // PITEM_LOG
 	PR_BYTE bytes; // service - PSECURITY_DESCRIPTOR / uwp - PSID (win8+)
@@ -303,7 +306,9 @@ typedef struct _ITEM_APP
 		ULONG is_haveerrors : 1;
 		ULONG is_silent : 1;
 		ULONG is_undeletable : 1;
-		ULONG spare_bits : 28;
+		ULONG is_ask_on_use : 1;
+		ULONG is_allow_until_closed : 1;
+		ULONG spare_bits : 26;
 	} DUMMYSTRUCTNAME;
 } ITEM_APP, *PITEM_APP;
 

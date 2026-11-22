@@ -1411,7 +1411,25 @@ VOID NTAPI _app_logthread (
 			{
 				if (ptr_app && !ptr_log->is_allow && is_exludeblocklist)
 				{
-					if (_app_getappinfo (ptr_app, INFO_IS_SILENT, &is_silent, sizeof (is_silent)))
+					BOOLEAN is_ask_on_use = FALSE;
+					_app_getappinfo (ptr_app, INFO_IS_ASK_ON_USE, &is_ask_on_use, sizeof (is_ask_on_use));
+
+					if (is_ask_on_use)
+					{
+						_modern_ui_record_standby_block (
+							ptr_app->app_hash,
+							(ptr_log->remote_addr_str && !_r_obj_isstringempty (ptr_log->remote_addr_str)) ? ptr_log->remote_addr_str->buffer : NULL,
+							ptr_log->remote_port,
+							(ptr_log->protocol_str && !_r_obj_isstringempty (ptr_log->protocol_str)) ? ptr_log->protocol_str->buffer : NULL
+						);
+
+						if (_modern_ui_consume_standby_arm (ptr_app->app_hash))
+						{
+							ptr_app->last_notify = 0;
+							_app_notify_addobject (hwnd, ptr_log, ptr_app);
+						}
+					}
+					else if (_app_getappinfo (ptr_app, INFO_IS_SILENT, &is_silent, sizeof (is_silent)))
 					{
 						if (!is_silent)
 							_app_notify_addobject (hwnd, ptr_log, ptr_app);

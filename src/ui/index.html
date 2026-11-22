@@ -448,6 +448,8 @@ html, body {
 .btn-green:hover:not(:disabled) { background: var(--green); color: #fff; }
 .btn-amber { background: var(--amber-soft); border-color: rgba(245,158,11,0.35); color: var(--amber); }
 .btn-amber:hover:not(:disabled) { background: var(--amber); color: #111; }
+.btn-blue { background: var(--accent-soft); border-color: rgba(59,130,246,0.35); color: var(--accent); }
+.btn-blue:hover:not(:disabled) { background: var(--accent); color: #fff; }
 .btn-red { background: var(--red-soft); border-color: rgba(239,68,68,0.3); color: var(--red); }
 .btn-red:hover:not(:disabled) { background: var(--red); color: #fff; }
 .btn-sm { padding: 5px 10px; font-size: 12px; }
@@ -543,6 +545,99 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* Company Groups */
+.company-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.company-group {
+  background: rgba(255,255,255,0.015);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  overflow: hidden;
+}
+[data-theme="light"] .company-group {
+  background: rgba(15,23,42,0.015);
+}
+.company-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  transition: background var(--transition);
+}
+.company-group.collapsed .company-header {
+  border-bottom-color: transparent;
+}
+.company-header:hover {
+  background: var(--bg-hover);
+}
+.company-header-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.company-chevron {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  font-size: 12px;
+  transition: transform 160ms ease;
+  flex-shrink: 0;
+}
+.company-group.collapsed .company-chevron {
+  transform: rotate(-90deg);
+}
+.company-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.company-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.company-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.company-group.collapsed .company-body {
+  display: none;
+}
+
+.wake-select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  cursor: pointer;
+}
+.wake-select:focus {
+  border-color: var(--accent);
 }
 
 .app-row {
@@ -916,7 +1011,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.6</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.7</div>
       </div>
     </div>
 
@@ -1019,7 +1114,7 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.2.6',
+  appVersion: '4.2.7',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
@@ -1028,6 +1123,8 @@ const state = {
   search: '',
   filterAllowed: 'all',
   filterBlocked: 'all',
+  groupByCompany: true,
+  collapsedCompanies: new Set(),
   hideHarmlessActivity: false,
   includeSystem: false,
   selectedAppId: null,
@@ -1100,16 +1197,19 @@ function getVisibleApps(kind) {
     }
     if (kind === 'allowed') {
       if (state.filterAllowed === 'running' && !a.isRunning) return false;
+      if (state.filterAllowed === 'until_closed' && !a.isAllowUntilClosed) return false;
       if (state.filterAllowed === 'missing' && a.exists) return false;
       if (state.filterAllowed === 'timed' && !(a.timerRemaining > 0)) return false;
     }
     if (kind === 'blocked') {
+      if (state.filterBlocked === 'ask_on_use' && !a.isAskOnUse) return false;
+      if (state.filterBlocked === 'always' && a.isAskOnUse) return false;
       if (state.filterBlocked === 'installed' && !a.exists) return false;
       if (state.filterBlocked === 'running' && !a.isRunning) return false;
       if (state.filterBlocked === 'missing' && a.exists) return false;
     }
     if (q) {
-      const hay = `${a.name} ${a.fileName} ${a.company} ${a.description} ${a.parentApp} ${a.path}`.toLowerCase();
+      const hay = `${a.name} ${a.fileName} ${a.company} ${a.companyGroup} ${a.description} ${a.parentApp} ${a.path} ${a.wakeTriggerName}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -1327,16 +1427,38 @@ function resetCustomLogo() {
   showToast('Restored default logo');
 }
 
-function allowApp(id, durationSeconds = 0, e) {
-  if (e) e.stopPropagation();
-  send('allowApp', { id, durationSeconds });
-  showToast(durationSeconds ? `Allowed for ${formatDuration(durationSeconds)}` : 'App allowed');
+function allowApp(id, durationSeconds = 0, e = null, untilClosed = false) {
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  send('allowApp', { id, durationSeconds, untilClosed: !!untilClosed });
+  if (untilClosed) showToast('Allowed until closed (will ask again next time)');
+  else showToast(durationSeconds ? `Allowed for ${formatDuration(durationSeconds)}` : 'App allowed');
 }
 
-function blockApp(id, e) {
-  if (e) e.stopPropagation();
-  send('blockApp', { id });
-  showToast('App blocked');
+function blockApp(id, e = null, askOnUse = false) {
+  if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  send('blockApp', { id, askOnUse: !!askOnUse });
+  showToast(askOnUse ? 'Blocked in background — will ask when opened' : 'App permanently blocked');
+}
+
+function setWakeTrigger(id, triggerPath) {
+  send('setWakeTrigger', { id, triggerPath: triggerPath || '' });
+  showToast(triggerPath ? 'Updated linked trigger app' : 'Reset to Auto (same app / suite)');
+}
+
+function toggleCompanyGroup(scope, company) {
+  const key = `${scope}::${company}`;
+  if (state.collapsedCompanies.has(key)) state.collapsedCompanies.delete(key);
+  else state.collapsedCompanies.add(key);
+  renderPage();
+}
+
+function setAllCompaniesCollapsed(scope, companies, collapse) {
+  for (const c of companies) {
+    const key = `${scope}::${c}`;
+    if (collapse) state.collapsedCompanies.add(key);
+    else state.collapsedCompanies.delete(key);
+  }
+  renderPage();
 }
 
 function deleteApps(ids) {
@@ -1407,9 +1529,16 @@ function renderAppRow(a, mode) {
 
   const badges = [];
   if (a.isRunning) badges.push(`<span class="pill pill-green"><span class="dot dot-green" style="width:6px;height:6px;box-shadow:none"></span>Running</span>`);
+  if (a.status === 'allowed' && a.isAllowUntilClosed) badges.push(`<span class="pill pill-blue">Until Closed</span>`);
+  if (a.status === 'blocked' && a.isAskOnUse) {
+    const trigLabel = a.wakeTriggerName ? ` · ${esc(a.wakeTriggerName)}` : '';
+    badges.push(`<span class="pill pill-amber">Ask on Open${trigLabel}</span>`);
+  } else if (mode === 'blocked' && !a.isAskOnUse) {
+    badges.push(`<span class="pill pill-muted">Always Blocked</span>`);
+  }
   if (!a.exists) badges.push(`<span class="pill pill-amber">Missing from PC</span>`);
   if (a.timerRemaining > 0) badges.push(`<span class="pill pill-blue">${formatDuration(a.timerRemaining)} left</span>`);
-  if (a.exists && a.signature) badges.push(`<span class="pill pill-muted">Signed</span>`);
+  if (a.exists && a.signature && mode !== 'blocked') badges.push(`<span class="pill pill-muted">Signed</span>`);
 
   const chkHtml = mode === 'cleanup'
     ? `<input class="chk" type="checkbox" ${state.cleanupSelected.has(a.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleCleanup('${a.id}', this.checked)">`
@@ -1417,9 +1546,13 @@ function renderAppRow(a, mode) {
 
   let actionHtml = '';
   if (mode === 'allowed') {
-    actionHtml = `<button class="btn btn-sm btn-red" onclick="blockApp('${a.id}', event)">Block</button>`;
+    actionHtml = `<button class="btn btn-sm btn-amber" title="Block silently in background, and ask again when you open this app or its related app" onclick="blockApp('${a.id}', event, true)">Ask on Open</button>
+      <button class="btn btn-sm btn-red" title="Block permanently and never ask again" onclick="blockApp('${a.id}', event, false)">Block</button>`;
   } else if (mode === 'blocked') {
-    actionHtml = `<button class="btn btn-sm btn-green" onclick="allowApp('${a.id}', 0, event)">Allow</button>`;
+    const modeBtn = a.isAskOnUse
+      ? `<button class="btn btn-sm" title="Switch to Always Blocked (never ask again)" onclick="blockApp('${a.id}', event, false)">Always Block</button>`
+      : `<button class="btn btn-sm btn-amber" title="Keep blocked in background, but ask again when opened" onclick="blockApp('${a.id}', event, true)">Ask on Open</button>`;
+    actionHtml = `${modeBtn}<button class="btn btn-sm btn-green" onclick="allowApp('${a.id}', 0, event, false)">Allow</button>`;
     if (!a.exists && !a.isSystem) {
       actionHtml += `<button class="btn btn-sm" onclick="event.stopPropagation(); deleteApps(['${a.id}'])">Remove</button>`;
     }
@@ -1440,6 +1573,68 @@ function renderAppRow(a, mode) {
     </div>
     <div class="row-actions">${actionHtml}</div>
   </div>`;
+}
+
+function compareCompanyNames(a, b) {
+  if (a === b) return 0;
+  if (a === 'Windows') return -1;
+  if (b === 'Windows') return 1;
+  if (a === 'Other / Independent') return 1;
+  if (b === 'Other / Independent') return -1;
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
+
+function sortAppsWithinGroup(arr, mode) {
+  return arr.slice().sort((x, y) => {
+    if (x.isRunning !== y.isRunning) return x.isRunning ? -1 : 1;
+    if (mode === 'blocked' && x.isAskOnUse !== y.isAskOnUse) return x.isAskOnUse ? -1 : 1;
+    const nx = (x.name || x.fileName || '').toLowerCase();
+    const ny = (y.name || y.fileName || '').toLowerCase();
+    return nx.localeCompare(ny);
+  });
+}
+
+function renderGroupedAppList(list, mode) {
+  if (!state.groupByCompany) {
+    const sorted = sortAppsWithinGroup(list, mode);
+    return `<div class="list">${sorted.map(a => renderAppRow(a, mode)).join('')}</div>`;
+  }
+
+  const groups = new Map();
+  for (const a of list) {
+    const comp = (a.companyGroup && a.companyGroup.trim()) ? a.companyGroup.trim() : 'Other / Independent';
+    if (!groups.has(comp)) groups.set(comp, []);
+    groups.get(comp).push(a);
+  }
+
+  const companyNames = Array.from(groups.keys()).sort(compareCompanyNames);
+  const autoExpandAll = state.search.trim().length > 0;
+
+  return `<div class="company-groups">${companyNames.map(comp => {
+    const items = sortAppsWithinGroup(groups.get(comp), mode);
+    const key = `${mode}::${comp}`;
+    const isCollapsed = !autoExpandAll && state.collapsedCompanies.has(key);
+    const runningCount = items.filter(x => x.isRunning).length;
+    const askCount = mode === 'blocked' ? items.filter(x => x.isAskOnUse).length : 0;
+    const safeComp = comp.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+    return `<div class="company-group ${isCollapsed ? 'collapsed' : ''}">
+      <div class="company-header" onclick="toggleCompanyGroup('${mode}', '${safeComp}')">
+        <div class="company-header-left">
+          <span class="company-chevron">▾</span>
+          <span class="company-title">${esc(comp)}</span>
+          <span class="pill pill-muted">${items.length}</span>
+        </div>
+        <div class="company-meta">
+          ${runningCount > 0 ? `<span class="pill pill-green">${runningCount} running</span>` : ''}
+          ${askCount > 0 ? `<span class="pill pill-amber">${askCount} ask on open</span>` : ''}
+        </div>
+      </div>
+      <div class="company-body">
+        ${items.map(a => renderAppRow(a, mode)).join('')}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function toggleCleanup(id, checked) {
@@ -1518,49 +1713,75 @@ function renderOverview() {
 
 function renderAllowed() {
   const list = getVisibleApps('allowed');
+  const companies = Array.from(new Set(list.map(a => (a.companyGroup && a.companyGroup.trim()) ? a.companyGroup.trim() : 'Other / Independent')));
+  const allCollapsed = companies.length > 0 && companies.every(c => state.collapsedCompanies.has(`allowed::${c}`));
   return `
     <div class="page-header">
       <div>
         <div class="page-title">Allowed Apps</div>
-        <div class="page-sub">Programs permitted to access the internet. Click any app to see who made it and where it lives.</div>
+        <div class="page-sub">Programs permitted to access the internet, organized by company. Use <strong>Ask on Open</strong> to block an app silently in the background until you open it again.</div>
       </div>
-      <button class="btn btn-primary" onclick="send('addApp')">+ Add App</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="segmented">
+          <button class="${state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=true;renderPage()">By Company</button>
+          <button class="${!state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=false;renderPage()">Flat List</button>
+        </div>
+        <button class="btn btn-primary" onclick="send('addApp')">+ Add App</button>
+      </div>
     </div>
     <div class="toolbar-row">
       <div class="chips">
         <button class="chip ${state.filterAllowed==='all'?'active':''}" onclick="state.filterAllowed='all';renderPage()">All Allowed</button>
         <button class="chip ${state.filterAllowed==='running'?'active':''}" onclick="state.filterAllowed='running';renderPage()">Running Now</button>
+        <button class="chip ${state.filterAllowed==='until_closed'?'active':''}" onclick="state.filterAllowed='until_closed';renderPage()">Until Closed</button>
         <button class="chip ${state.filterAllowed==='timed'?'active':''}" onclick="state.filterAllowed='timed';renderPage()">Temporary Timer</button>
         <button class="chip ${state.filterAllowed==='missing'?'active':''}" onclick="state.filterAllowed='missing';renderPage()">Missing from PC</button>
       </div>
-      <div style="font-size:12px;color:var(--text-3)">Showing ${list.length} apps</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        ${state.groupByCompany && companies.length > 1 ? `<button class="btn btn-sm" onclick="setAllCompaniesCollapsed('allowed', ${JSON.stringify(companies).replace(/"/g, '&quot;')}, ${!allCollapsed})">${allCollapsed ? 'Expand All' : 'Collapse All'}</button>` : ''}
+        <span style="font-size:12px;color:var(--text-3)">${list.length} apps${state.groupByCompany ? ` · ${companies.length} companies` : ''}</span>
+      </div>
     </div>
-    ${list.length ? `<div class="list">${list.map(a => renderAppRow(a, 'allowed')).join('')}</div>`
+    ${list.length ? renderGroupedAppList(list, 'allowed')
       : `<div class="empty"><div class="empty-title">No matching allowed apps</div>Try clearing your search or filter.</div>`}
   `;
 }
 
 function renderBlocked() {
   const list = getVisibleApps('blocked');
+  const companies = Array.from(new Set(list.map(a => (a.companyGroup && a.companyGroup.trim()) ? a.companyGroup.trim() : 'Other / Independent')));
+  const allCollapsed = companies.length > 0 && companies.every(c => state.collapsedCompanies.has(`blocked::${c}`));
+  const askCount = state.apps.filter(a => a.status === 'blocked' && a.isAskOnUse).length;
   return `
     <div class="page-header">
       <div>
         <div class="page-title">Blocked Apps</div>
-        <div class="page-sub">Programs blocked from the internet — even while Safe Pause is active. Click any app to inspect what it is.</div>
+        <div class="page-sub">Programs blocked from the internet — even while Safe Pause is active. <strong>Ask on Open</strong> apps stay quiet in the background and re-ask when you open them or their related app.</div>
       </div>
-      <button class="btn" onclick="setPage('cleanup')">Clean Up Missing</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="segmented">
+          <button class="${state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=true;renderPage()">By Company</button>
+          <button class="${!state.groupByCompany ? 'active' : ''}" onclick="state.groupByCompany=false;renderPage()">Flat List</button>
+        </div>
+        <button class="btn" onclick="setPage('cleanup')">Clean Up Missing</button>
+      </div>
     </div>
     <div class="toolbar-row">
       <div class="chips">
         <button class="chip ${state.filterBlocked==='all'?'active':''}" onclick="state.filterBlocked='all';renderPage()">All Blocked</button>
+        <button class="chip ${state.filterBlocked==='ask_on_use'?'active':''}" onclick="state.filterBlocked='ask_on_use';renderPage()">Ask on Open${askCount ? ` (${askCount})` : ''}</button>
+        <button class="chip ${state.filterBlocked==='always'?'active':''}" onclick="state.filterBlocked='always';renderPage()">Always Blocked</button>
         <button class="chip ${state.filterBlocked==='installed'?'active':''}" onclick="state.filterBlocked='installed';renderPage()">Still on PC</button>
         <button class="chip ${state.filterBlocked==='running'?'active':''}" onclick="state.filterBlocked='running';renderPage()">Running Now</button>
         <button class="chip ${state.filterBlocked==='missing'?'active':''}" onclick="state.filterBlocked='missing';renderPage()">Missing / Uninstalled</button>
         <button class="chip ${state.includeSystem?'active':''}" onclick="state.includeSystem=!state.includeSystem;renderChrome();renderPage()">Include Windows Services & Store</button>
       </div>
-      <div style="font-size:12px;color:var(--text-3)">Showing ${list.length} apps</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        ${state.groupByCompany && companies.length > 1 ? `<button class="btn btn-sm" onclick="setAllCompaniesCollapsed('blocked', ${JSON.stringify(companies).replace(/"/g, '&quot;')}, ${!allCollapsed})">${allCollapsed ? 'Expand All' : 'Collapse All'}</button>` : ''}
+        <span style="font-size:12px;color:var(--text-3)">${list.length} apps${state.groupByCompany ? ` · ${companies.length} companies` : ''}</span>
+      </div>
     </div>
-    ${list.length ? `<div class="list">${list.map(a => renderAppRow(a, 'blocked')).join('')}</div>`
+    ${list.length ? renderGroupedAppList(list, 'blocked')
       : `<div class="empty"><div class="empty-title">No matching blocked apps</div>Try changing your filter or search query.</div>`}
   `;
 }
@@ -1833,8 +2054,12 @@ function renderInspector() {
   const wasOpen = panel.classList.contains('open');
 
   const statusPill = a.status === 'allowed'
-    ? `<span class="pill pill-green">Allowed Internet</span>`
-    : `<span class="pill pill-red">Blocked</span>`;
+    ? (a.isAllowUntilClosed
+        ? `<span class="pill pill-blue">Allowed Until Closed</span>`
+        : `<span class="pill pill-green">Allowed Internet</span>`)
+    : (a.isAskOnUse
+        ? `<span class="pill pill-amber">Blocked · Ask on Open</span>`
+        : `<span class="pill pill-red">Always Blocked</span>`);
   const existPill = a.exists
     ? `<span class="pill pill-blue">Installed on PC</span>`
     : `<span class="pill pill-amber">Missing / Uninstalled</span>`;
@@ -1908,6 +2133,48 @@ function renderInspector() {
     `;
   }
 
+  let standbyBoxHtml = '';
+  if (a.status === 'blocked' || a.isAllowUntilClosed) {
+    const triggerCandidates = state.apps
+      .filter(x => x.id !== a.id && x.exists && x.path && (x.category === 'app' || x.category === 'uwp') && !x.isSystem)
+      .sort((x, y) => {
+        const cx = compareCompanyNames(x.companyGroup || 'Other / Independent', y.companyGroup || 'Other / Independent');
+        if (cx !== 0) return cx;
+        return (x.name || x.fileName || '').localeCompare(y.name || y.fileName || '');
+      });
+    const curTrigLow = (a.wakeTrigger || '').toLowerCase();
+    const hasExactOpt = curTrigLow && triggerCandidates.some(x => (x.path || '').toLowerCase() === curTrigLow);
+
+    standbyBoxHtml = `
+      <div class="info-box">
+        <div class="info-box-title">Background Block Behavior</div>
+        <div class="segmented" style="width:100%">
+          <button style="flex:1" class="${a.isAskOnUse ? 'active' : ''}" onclick="blockApp('${a.id}', null, true)">Ask When Opened</button>
+          <button style="flex:1" class="${!a.isAskOnUse ? 'active' : ''}" onclick="blockApp('${a.id}', null, false)">Always Block</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-2);line-height:1.45">
+          ${a.isAskOnUse
+            ? 'Blocked silently in the background with zero spam. SimpleWall asks you to authorize it again whenever you open this app or its related app.'
+            : 'Permanently blocked and muted. SimpleWall will never pop up an authorization alert for this app.'}
+        </div>
+        ${a.isAskOnUse ? `
+          <div class="info-field" style="margin-top:4px">
+            <div class="info-label">Wake &amp; ask when I open</div>
+            <select class="wake-select" onchange="setWakeTrigger('${a.id}', this.value)">
+              <option value="" ${!a.wakeTrigger ? 'selected' : ''}>Auto (This app or same folder / suite)</option>
+              ${!hasExactOpt && a.wakeTrigger ? `<option value="${esc(a.wakeTrigger)}" selected>${esc(a.wakeTriggerName || a.wakeTrigger)} (linked)</option>` : ''}
+              ${triggerCandidates.map(x => {
+                const sel = (x.path || '').toLowerCase() === curTrigLow ? 'selected' : '';
+                const grp = x.companyGroup && x.companyGroup !== 'Other / Independent' ? `[${x.companyGroup}] ` : '';
+                return `<option value="${esc(x.path)}" ${sel}>${esc(grp + (x.name || x.fileName))}</option>`;
+              }).join('')}
+            </select>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
   panel.innerHTML = `
     <div class="inspector-top">
       <div class="inspector-hero">
@@ -1929,8 +2196,14 @@ function renderInspector() {
 
     ${logoPickerHtml}
 
+    ${standbyBoxHtml}
+
     <div class="info-box">
       <div class="info-box-title">Who is this & what does it do?</div>
+      <div class="info-field">
+        <div class="info-label">Company Group</div>
+        <div class="info-value">${esc(a.companyGroup || 'Other / Independent')}</div>
+      </div>
       <div class="info-field">
         <div class="info-label">Made by (Publisher)</div>
         <div class="info-value">${esc(madeBy)}</div>
@@ -1961,12 +2234,18 @@ function renderInspector() {
 
     <div class="inspector-actions">
       ${a.status === 'allowed'
-        ? `<button class="btn btn-red" onclick="blockApp('${a.id}')">Block Internet Access</button>`
-        : `<button class="btn btn-green" onclick="allowApp('${a.id}', 0)">Allow Internet Access</button>
+        ? `<div class="action-row">
+             <button class="btn btn-amber" title="Block silently in background; asks again when you open it or its related app" onclick="blockApp('${a.id}', null, true)">Block Until Used</button>
+             <button class="btn btn-red" title="Block permanently and never ask again" onclick="blockApp('${a.id}', null, false)">Always Block</button>
+           </div>`
+        : `<div class="action-row">
+             <button class="btn btn-green" onclick="allowApp('${a.id}', 0, null, false)">Allow Always</button>
+             <button class="btn btn-blue" title="Allow now and automatically return to Block Until Used when closed" onclick="allowApp('${a.id}', 0, null, true)">Allow Until Closed</button>
+           </div>
            <div class="action-row">
-             <button class="btn btn-sm" onclick="allowApp('${a.id}', 600)">Allow 10m</button>
-             <button class="btn btn-sm" onclick="allowApp('${a.id}', 1800)">Allow 30m</button>
-             <button class="btn btn-sm" onclick="allowApp('${a.id}', 3600)">Allow 1h</button>
+             <button class="btn btn-sm" onclick="allowApp('${a.id}', 600, null, false)">Allow 10m</button>
+             <button class="btn btn-sm" onclick="allowApp('${a.id}', 1800, null, false)">Allow 30m</button>
+             <button class="btn btn-sm" onclick="allowApp('${a.id}', 3600, null, false)">Allow 1h</button>
            </div>`
       }
       <div class="action-row">

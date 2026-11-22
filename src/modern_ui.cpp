@@ -110,7 +110,38 @@ struct AlertItem
 	UINT16 remotePort = 0;
 	std::wstring protocol;
 	bool canReopen = false;
+	std::wstring wakeSource;
+	bool isAskOnUse = false;
 };
+
+struct StandbyRuntimeState
+{
+	std::wstring lastRemoteAddr;
+	UINT16 lastRemotePort = 0;
+	std::wstring lastProtocol;
+	ULONGLONG lastBlockedTick = 0;
+
+	ULONGLONG armedUntilTick = 0;
+	DWORD triggerPid = 0;
+	std::wstring triggerPathLow;
+	std::wstring wakeSourceName;
+	bool promptedThisArm = false;
+	bool isDirectWake = false;
+	bool isManualTriggerWake = false;
+	ULONGLONG pendingPromptAtTick = 0;
+
+	DWORD handledPid = 0;
+	ULONGLONG lastPromptTick = 0;
+
+	std::wstring sessionWatchPathLow;
+	ULONGLONG sessionAllowedAtTick = 0;
+};
+
+std::mutex g_standbyMutex;
+std::unordered_map<ULONG_PTR, StandbyRuntimeState> g_standbyState;
+HWINEVENTHOOK g_fgHook = nullptr;
+constexpr UINT_PTR kWakeMonitorTimerId = 88;
+UINT g_wakeMonitorTickCount = 0;
 
 HWND g_hwnd = nullptr;
 ICoreWebView2Environment *g_env = nullptr;
@@ -516,6 +547,354 @@ std::wstring InferParentApp (const std::wstring &path)
 		size_t prevSlash = path.find_last_of (L"\\/", lastSlash - 1);
 		if (prevSlash != std::wstring::npos)
 			return path.substr (prevSlash + 1, lastSlash - prevSlash - 1);
+	}
+
+	return L"";
+}
+
+// ---- Smart App Suite & Company Grouping Helpers ----
+
+std::wstring TrimWhitespace (const std::wstring &s)
+{
+	size_t start = 0;
+	while (start < s.size () && (iswspace (s[start]) || s[start] == L',' || s[start] == L'.'))
+		start++;
+	size_t end = s.size ();
+	while (end > start && (iswspace (s[end - 1]) || s[end - 1] == L','))
+		end--;
+	return s.substr (start, end - start);
+}
+
+std::wstring StripLegalSuffixes (const std::wstring &raw)
+{
+	std::wstring s = TrimWhitespace (raw);
+	if (s.empty ()) return L"";
+
+	static const wchar_t *kSuffixes[] = {
+		L", co., ltd.", L" co., ltd.", L", co., ltd", L" co., ltd",
+		L", inc.", L" inc.", L", inc", L" inc",
+		L", llc.", L" llc.", L", llc", L" llc",
+		L", corp.", L" corp.", L", corp", L" corp",
+		L", corporation", L" corporation",
+		L", ltd.", L" ltd.", L", ltd", L" ltd",
+		L", limited", L" limited",
+		L", pbc", L" pbc",
+		L", gmbh", L" gmbh",
+		L", s.a.", L" s.a.", L", b.v.", L" b.v.",
+		L", plc", L" plc", L", pty ltd", L" pty ltd",
+		L", l.p.", L" l.p.", L", a.s.", L" a.s."
+	};
+
+	bool changed = true;
+	while (changed && !s.empty ())
+	{
+		changed = false;
+		std::wstring low = ToLower (s);
+		for (const wchar_t *suf : kSuffixes)
+		{
+			size_t slen = wcslen (suf);
+			if (low.size () > slen && low.compare (low.size () - slen, slen, suf) == 0)
+			{
+				s = TrimWhitespace (s.substr (0, s.size () - slen));
+				changed = true;
+				break;
+			}
+		}
+	}
+
+	// Trim trailing stray periods/commas unless part of short abbreviation
+	while (!s.empty () && (s.back () == L',' || iswspace (s.back ())))
+		s.pop_back ();
+	if (s.size () > 3 && s.back () == L'.')
+		s.pop_back ();
+
+	return s;
+}
+
+std::wstring MatchKnownCompanyBrand (const std::wstring &text)
+{
+	if (text.empty ()) return L"";
+	std::wstring low = ToLower (text);
+
+	struct BrandRule { const wchar_t *needle; const wchar_t *canonical; };
+	static const BrandRule kBrands[] = {
+		{ L"anthropic", L"Anthropic" },
+		{ L"claude", L"Anthropic" },
+		{ L"openai", L"OpenAI" },
+		{ L"chatgpt", L"OpenAI" },
+		{ L"google", L"Google" },
+		{ L"microsoft", L"Microsoft" },
+		{ L"adobe", L"Adobe" },
+		{ L"nvidia", L"NVIDIA" },
+		{ L"advanced micro devices", L"AMD" },
+		{ L"intel", L"Intel" },
+		{ L"apple", L"Apple" },
+		{ L"valve", L"Valve" },
+		{ L"steam", L"Valve" },
+		{ L"discord", L"Discord" },
+		{ L"spotify", L"Spotify" },
+		{ L"mozilla", L"Mozilla" },
+		{ L"brave", L"Brave" },
+		{ L"opera", L"Opera" },
+		{ L"meta platforms", L"Meta" },
+		{ L"whatsapp", L"Meta" },
+		{ L"facebook", L"Meta" },
+		{ L"github", L"GitHub" },
+		{ L"jetbrains", L"JetBrains" },
+		{ L"docker", L"Docker" },
+		{ L"epic games", L"Epic Games" },
+		{ L"riot games", L"Riot Games" },
+		{ L"electronic arts", L"Electronic Arts" },
+		{ L"ubisoft", L"Ubisoft" },
+		{ L"blizzard", L"Blizzard" },
+		{ L"activision", L"Blizzard" },
+		{ L"logitech", L"Logitech" },
+		{ L"razer", L"Razer" },
+		{ L"corsair", L"Corsair" },
+		{ L"realtek", L"Realtek" },
+		{ L"oracle", L"Oracle" },
+		{ L"python", L"Python" },
+		{ L"node.js", L"Node.js" },
+		{ L"cloudflare", L"Cloudflare" },
+		{ L"tailscale", L"Tailscale" },
+		{ L"proton", L"Proton" },
+		{ L"1password", L"1Password" },
+		{ L"agilebits", L"1Password" },
+		{ L"bitwarden", L"Bitwarden" },
+		{ L"obsidian", L"Obsidian" },
+		{ L"notion", L"Notion" },
+		{ L"slack", L"Slack" },
+		{ L"zoom", L"Zoom" },
+		{ L"telegram", L"Telegram" },
+		{ L"dropbox", L"Dropbox" },
+		{ L"anysphere", L"Cursor" },
+		{ L"cursor", L"Cursor" },
+		{ L"codeium", L"Codeium" },
+		{ L"windsurf", L"Codeium" },
+		{ L"henry++", L"SimpleWall" },
+		{ L"simplewall", L"SimpleWall" },
+		{ L"videolan", L"VideoLAN" },
+		{ L"gog.com", L"GOG" },
+		{ L"cd projekt", L"GOG" },
+		{ L"dropbox", L"Dropbox" },
+		{ L"autodesk", L"Autodesk" },
+		{ L"blender", L"Blender" },
+		{ L"figma", L"Figma" },
+		{ L"canva", L"Canva" },
+		{ L"dell", L"Dell" },
+		{ L"hewlett-packard", L"HP" },
+		{ L"hp inc", L"HP" },
+		{ L"lenovo", L"Lenovo" },
+		{ L"asus", L"ASUS" },
+		{ L"msi", L"MSI" },
+		{ L"samsung", L"Samsung" },
+		{ L"sony", L"Sony" },
+		{ L"cisco", L"Cisco" },
+		{ L"vmware", L"VMware" },
+		{ L"nordsec", L"Nord Security" },
+		{ L"nordvpn", L"Nord Security" },
+		{ L"mullvad", L"Mullvad" },
+		{ L"tailscale", L"Tailscale" },
+		{ L"git for windows", L"Git" },
+		{ L"wireshark", L"Wireshark" },
+		{ L"postman", L"Postman" }
+	};
+
+	for (const auto &r : kBrands)
+	{
+		if (low.find (r.needle) != std::wstring::npos)
+			return r.canonical;
+	}
+
+	if (low == L"amd" || low.starts_with (L"amd "))
+		return L"AMD";
+	if (low == L"ea" || low.starts_with (L"ea "))
+		return L"Electronic Arts";
+
+	return L"";
+}
+
+std::wstring NormalizeCompanyGroup (
+	const std::wstring &path,
+	const std::wstring &company,
+	const std::wstring &signature,
+	const std::wstring &parentApp,
+	int category,
+	bool isSystem
+)
+{
+	std::wstring lowPath = ToLower (path);
+	std::wstring lowComp = ToLower (company);
+	std::wstring lowSig = ToLower (signature);
+
+	// 1. Separate built-in Windows OS components from Microsoft desktop/Store apps
+	bool isWindowsOsPath =
+		lowPath.find (L"\\windows\\system32\\") != std::wstring::npos ||
+		lowPath.find (L"\\windows\\syswow64\\") != std::wstring::npos ||
+		lowPath.find (L"\\windows\\systemapps\\") != std::wstring::npos ||
+		lowPath.find (L"\\windows\\immersivecontrolpanel\\") != std::wstring::npos ||
+		lowPath.find (L"\\windows\\winsxs\\") != std::wstring::npos ||
+		lowPath == L"system" ||
+		lowPath.find (L"ntoskrnl") != std::wstring::npos;
+
+	bool isWindowsSigner =
+		lowSig.find (L"microsoft windows") != std::wstring::npos ||
+		lowComp.find (L"microsoft windows") != std::wstring::npos;
+
+	if (isSystem || isWindowsOsPath || (category == 2 && lowPath.find (L"\\windows\\") != std::wstring::npos) || (isWindowsSigner && lowPath.find (L"\\windowsapps\\") == std::wstring::npos))
+		return L"Windows";
+
+	// 2. Match known brands from CompanyName -> Digital Signature -> Path/Folder
+	std::wstring brand = MatchKnownCompanyBrand (company);
+	if (!brand.empty ()) return brand;
+
+	brand = MatchKnownCompanyBrand (signature);
+	if (!brand.empty ()) return brand;
+
+	// 3. Use cleaned PE CompanyName if available
+	std::wstring cleanedComp = StripLegalSuffixes (company);
+	if (!cleanedComp.empty () && ToLower (cleanedComp) != L"unknown" && ToLower (cleanedComp) != L"n/a")
+		return cleanedComp;
+
+	// 4. Use cleaned Digital Signature if available
+	std::wstring cleanedSig = StripLegalSuffixes (signature);
+	if (!cleanedSig.empty () && ToLower (cleanedSig) != L"unknown")
+		return cleanedSig;
+
+	// 5. Fallback to known brand or clean first folder from parentApp / path
+	brand = MatchKnownCompanyBrand (parentApp);
+	if (!brand.empty ()) return brand;
+
+	brand = MatchKnownCompanyBrand (path);
+	if (!brand.empty ()) return brand;
+
+	if (!parentApp.empty ())
+	{
+		std::wstring seg = parentApp;
+		size_t sep = seg.find (L" / ");
+		if (sep != std::wstring::npos)
+			seg = seg.substr (0, sep);
+		std::wstring segLow = ToLower (seg);
+		if (segLow != L"windows operating system" &&
+			segLow != L"windows system component" &&
+			segLow != L"microsoft store app" &&
+			segLow != L"windows kernel" &&
+			segLow != L"program files" &&
+			segLow != L"program files (x86)" &&
+			segLow != L"temp" &&
+			segLow != L"downloads" &&
+			segLow != L"desktop" &&
+			segLow != L"bin" &&
+			segLow != L"app")
+		{
+			std::wstring cleanedSeg = StripLegalSuffixes (seg);
+			if (!cleanedSeg.empty ())
+				return cleanedSeg;
+		}
+	}
+
+	return L"Other / Independent";
+}
+
+// Extracts a safe application-suite folder key so helpers in the same app install folder
+// automatically wake when the main app opens (while avoiding overly broad folders like System32).
+std::wstring ExtractSuiteKey (const std::wstring &path)
+{
+	if (path.empty ()) return L"";
+	std::wstring low = ToLower (path);
+	for (auto &c : low) { if (c == L'/') c = L'\\'; }
+
+	if (low.find (L"\\windows\\") != std::wstring::npos ||
+		low.find (L"\\system32\\") != std::wstring::npos ||
+		low.find (L"\\syswow64\\") != std::wstring::npos)
+		return L"";
+
+	// Store / MSIX packages: \WindowsApps\<PackageName>_<Version>...
+	size_t waIdx = low.find (L"\\windowsapps\\");
+	if (waIdx != std::wstring::npos)
+	{
+		size_t start = waIdx + wcslen (L"\\windowsapps\\");
+		size_t slash = low.find (L'\\', start);
+		if (slash != std::wstring::npos)
+		{
+			std::wstring pkg = low.substr (start, slash - start);
+			size_t under = pkg.find (L'_');
+			if (under != std::wstring::npos)
+				pkg = pkg.substr (0, under);
+			if (!pkg.empty ())
+				return L"windowsapps\\" + pkg;
+		}
+		return L"";
+	}
+
+	const wchar_t *markers[] = {
+		L"\\program files (x86)\\",
+		L"\\program files\\",
+		L"\\appdata\\local\\programs\\",
+		L"\\appdata\\local\\",
+		L"\\appdata\\roaming\\",
+		L"\\programdata\\"
+	};
+
+	static const wchar_t *kBroadVendors[] = {
+		L"microsoft", L"google", L"adobe", L"common files", L"packages",
+		L"intel", L"nvidia corporation", L"amd", L"oracle", L"temp", L"cache"
+	};
+
+	for (const wchar_t *m : markers)
+	{
+		size_t idx = low.find (m);
+		if (idx != std::wstring::npos)
+		{
+			size_t start = idx + wcslen (m);
+			size_t s1 = low.find (L'\\', start);
+			if (s1 == std::wstring::npos)
+				return L"";
+
+			std::wstring seg1 = low.substr (start, s1 - start);
+			if (seg1.empty () || seg1 == L"temp" || seg1 == L"tmp" || seg1 == L"packages")
+				return L"";
+
+			bool isBroad = false;
+			for (const wchar_t *bv : kBroadVendors)
+			{
+				if (seg1 == bv) { isBroad = true; break; }
+			}
+
+			if (isBroad)
+			{
+				size_t s2 = low.find (L'\\', s1 + 1);
+				if (s2 == std::wstring::npos)
+					return L"";
+				std::wstring seg2 = low.substr (s1 + 1, s2 - s1 - 1);
+				if (seg2.empty ())
+					return L"";
+				return seg1 + L"\\" + seg2;
+			}
+
+			return seg1;
+		}
+	}
+
+	// Custom portable install directory (e.g. D:\Apps\MyTool\bin\helper.exe -> d:\apps\mytool)
+	size_t lastSlash = low.find_last_of (L'\\');
+	if (lastSlash != std::wstring::npos && lastSlash > 3)
+	{
+		std::wstring dir = low.substr (0, lastSlash);
+		size_t prevSlash = dir.find_last_of (L'\\');
+		if (prevSlash != std::wstring::npos && prevSlash > 2)
+		{
+			std::wstring leaf = dir.substr (prevSlash + 1);
+			if (leaf == L"bin" || leaf == L"app" || leaf == L"application" || leaf == L"helpers" || leaf == L"resources" || leaf.starts_with (L"app-"))
+				dir = dir.substr (0, prevSlash);
+		}
+		// Reject root drives / downloads / desktop
+		if (dir.size () > 3 &&
+			dir.find (L"\\downloads") == std::wstring::npos &&
+			dir.find (L"\\desktop") == std::wstring::npos)
+		{
+			return dir;
+		}
 	}
 
 	return L"";
@@ -1770,6 +2149,12 @@ std::wstring BuildFullSnapshotJson ()
 			? L"Custom saved logo"
 			: (meta.iconSource.empty () ? (finalIcon.empty () ? L"Default letter badge" : L"Detected logo") : meta.iconSource);
 
+		std::wstring companyGroup = NormalizeCompanyGroup (path, meta.company, sig, meta.parentApp, a.category, a.is_system != FALSE);
+		std::wstring wakeTrigger (a.wake_trigger);
+		std::wstring wakeTriggerName = wakeTrigger.empty () ? L"" : ExtractFileName (wakeTrigger);
+		if (wakeTriggerName.size () > 4 && ToLower (wakeTriggerName.substr (wakeTriggerName.size () - 4)) == L".exe")
+			wakeTriggerName = wakeTriggerName.substr (0, wakeTriggerName.size () - 4);
+
 		ss << L"{\"id\":\"" << a.app_hash << L"\""
 			<< L",\"name\":\"" << JsonEscape (name.empty () ? fileName : name) << L"\""
 			<< L",\"fileName\":\"" << JsonEscape (fileName) << L"\""
@@ -1780,6 +2165,11 @@ std::wstring BuildFullSnapshotJson ()
 			<< L",\"isRunning\":" << (isRun ? L"true" : L"false")
 			<< L",\"isSilent\":" << (a.is_silent ? L"true" : L"false")
 			<< L",\"isSystem\":" << (a.is_system ? L"true" : L"false")
+			<< L",\"isAskOnUse\":" << (a.is_ask_on_use ? L"true" : L"false")
+			<< L",\"isAllowUntilClosed\":" << (a.is_allow_until_closed ? L"true" : L"false")
+			<< L",\"wakeTrigger\":\"" << JsonEscape (wakeTrigger) << L"\""
+			<< L",\"wakeTriggerName\":\"" << JsonEscape (wakeTriggerName) << L"\""
+			<< L",\"companyGroup\":\"" << JsonEscape (companyGroup) << L"\""
 			<< L",\"timerRemaining\":" << a.timer_remaining
 			<< L",\"timestamp\":" << a.timestamp
 			<< L",\"company\":\"" << JsonEscape (meta.company) << L"\""
@@ -3026,20 +3416,80 @@ void HandleWebMessage (const std::wstring &json)
 	{
 		std::wstring idStr;
 		LONG64 dur = 0;
+		bool untilClosed = false;
 		if (ExtractJsonString (json, L"id", idStr))
 		{
 			ExtractJsonInt64 (json, L"durationSeconds", dur);
+			ExtractJsonBool (json, L"untilClosed", untilClosed);
 			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
-			if (h) _modern_bridge_allow_app (g_hwnd, h, dur);
+			if (h)
+			{
+				{
+					std::lock_guard<std::mutex> lock (g_standbyMutex);
+					auto &st = g_standbyState[h];
+					st.armedUntilTick = 0;
+					st.pendingPromptAtTick = 0;
+					st.promptedThisArm = false;
+					if (untilClosed)
+					{
+						st.sessionAllowedAtTick = GetTickCount64 ();
+						if (!st.triggerPathLow.empty ())
+							st.sessionWatchPathLow = st.triggerPathLow;
+						else
+							st.sessionWatchPathLow.clear ();
+					}
+					else
+					{
+						st.sessionWatchPathLow.clear ();
+						st.sessionAllowedAtTick = 0;
+					}
+				}
+				_modern_bridge_allow_app (g_hwnd, h, dur, untilClosed ? TRUE : FALSE);
+			}
 		}
 	}
 	else if (action == L"blockApp")
 	{
 		std::wstring idStr;
+		bool askOnUse = false;
 		if (ExtractJsonString (json, L"id", idStr))
 		{
+			ExtractJsonBool (json, L"askOnUse", askOnUse);
 			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
-			if (h) _modern_bridge_block_app (g_hwnd, h);
+			if (h)
+			{
+				{
+					std::lock_guard<std::mutex> lock (g_standbyMutex);
+					auto &st = g_standbyState[h];
+					st.armedUntilTick = 0;
+					st.pendingPromptAtTick = 0;
+					st.promptedThisArm = false;
+					st.handledPid = 0;
+					st.lastBlockedTick = 0;
+					st.sessionWatchPathLow.clear ();
+					st.sessionAllowedAtTick = 0;
+				}
+				_modern_bridge_block_app (g_hwnd, h, askOnUse ? TRUE : FALSE);
+			}
+		}
+	}
+	else if (action == L"setWakeTrigger")
+	{
+		std::wstring idStr, triggerPath;
+		if (ExtractJsonString (json, L"id", idStr))
+		{
+			ExtractJsonString (json, L"triggerPath", triggerPath);
+			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+			if (h)
+			{
+				{
+					std::lock_guard<std::mutex> lock (g_standbyMutex);
+					auto &st = g_standbyState[h];
+					st.handledPid = 0;
+					st.promptedThisArm = false;
+				}
+				_modern_bridge_set_wake_trigger (g_hwnd, h, triggerPath.empty () ? nullptr : triggerPath.c_str ());
+			}
 		}
 	}
 	else if (action == L"deleteApps")
@@ -3242,8 +3692,8 @@ int g_alertAnimDir = 0; // 1 = opening, -1 = closing, 0 = idle
 DWORD g_alertAnimStart = 0;
 int g_alertTargetX = 0;
 int g_alertTargetY = 0;
-int g_alertW = 432;
-int g_alertH = 282;
+int g_alertW = 448;
+int g_alertH = 314;
 int g_alertSlidePx = 18;
 
 void ComputeAlertTargetRect ()
@@ -3253,8 +3703,8 @@ void ComputeAlertTargetRect ()
 
 	UINT dpi = GetDpiForWindow (g_alertHwnd);
 	if (dpi == 0) dpi = 96;
-	g_alertW = MulDiv (432, (int)dpi, 96);
-	g_alertH = MulDiv (282, (int)dpi, 96);
+	g_alertW = MulDiv (448, (int)dpi, 96);
+	g_alertH = MulDiv (314, (int)dpi, 96);
 	g_alertSlidePx = MulDiv (18, (int)dpi, 96);
 	int margin = MulDiv (16, (int)dpi, 96);
 
@@ -3377,6 +3827,8 @@ void ShowFrontAlert ()
 		<< L",\"remotePort\":" << a.remotePort
 		<< L",\"protocol\":\"" << JsonEscape (a.protocol) << L"\""
 		<< L",\"canReopen\":" << (a.canReopen ? L"true" : L"false")
+		<< L",\"wakeSource\":\"" << JsonEscape (a.wakeSource) << L"\""
+		<< L",\"isAskOnUse\":" << (a.isAskOnUse ? L"true" : L"false")
 		<< L",\"queueCount\":" << g_alertQueue.size ()
 		<< L",\"theme\":\"" << (st.is_dark_theme ? L"dark" : L"light") << L"\""
 		<< L",\"soundEnabled\":" << (st.sound ? L"true" : L"false")
@@ -3421,7 +3873,42 @@ void HandleAlertMessage (const std::wstring &json)
 			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
 			if (h)
 			{
-				_modern_bridge_notify_decision (g_hwnd, h, decision == L"allow" ? TRUE : FALSE, dur, reopen ? TRUE : FALSE);
+				int mode = 0; // 0=always_block
+				if (decision == L"allow_until_closed") mode = 3;
+				else if (decision == L"allow") mode = 1;
+				else if (decision == L"ask_on_use") mode = 2;
+
+				{
+					std::lock_guard<std::mutex> lock (g_standbyMutex);
+					auto &st = g_standbyState[h];
+					st.armedUntilTick = 0;
+					st.pendingPromptAtTick = 0;
+					st.promptedThisArm = false;
+					if (mode == 3)
+					{
+						st.sessionAllowedAtTick = GetTickCount64 ();
+						if (!st.triggerPathLow.empty ())
+							st.sessionWatchPathLow = st.triggerPathLow;
+						else
+							st.sessionWatchPathLow.clear ();
+					}
+					else if (mode == 2)
+					{
+						// Keep quiet while this exact process session remains open
+						if (st.triggerPid)
+							st.handledPid = st.triggerPid;
+						st.sessionWatchPathLow.clear ();
+						st.sessionAllowedAtTick = 0;
+					}
+					else
+					{
+						st.handledPid = 0;
+						st.sessionWatchPathLow.clear ();
+						st.sessionAllowedAtTick = 0;
+					}
+				}
+
+				_modern_bridge_notify_decision (g_hwnd, h, mode, dur, reopen ? TRUE : FALSE);
 			}
 		}
 	}
@@ -3433,7 +3920,20 @@ void HandleAlertMessage (const std::wstring &json)
 			h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
 
 		if (action == L"dismiss" && h)
+		{
+			{
+				std::lock_guard<std::mutex> lock (g_standbyMutex);
+				auto it = g_standbyState.find (h);
+				if (it != g_standbyState.end ())
+				{
+					it->second.armedUntilTick = 0;
+					it->second.pendingPromptAtTick = 0;
+					if (it->second.triggerPid)
+						it->second.handledPid = it->second.triggerPid;
+				}
+			}
 			_modern_bridge_notify_dismiss (h);
+		}
 
 		if (!g_alertQueue.empty ())
 		{
@@ -3810,6 +4310,437 @@ public:
 	}
 };
 
+// ---- Standby Block ("Block Until Used") & "Allow Until Closed" Watcher ----
+
+std::wstring GetProcessImagePathByPid (DWORD pid)
+{
+	if (!pid) return L"";
+	HANDLE hProc = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+	if (!hProc) return L"";
+	WCHAR buf[1024] = {};
+	DWORD sz = RTL_NUMBER_OF (buf);
+	std::wstring res;
+	if (QueryFullProcessImageNameW (hProc, 0, buf, &sz) && sz > 0)
+		res.assign (buf, sz);
+	CloseHandle (hProc);
+	return res;
+}
+
+bool IsPidStillAlive (DWORD pid)
+{
+	if (!pid) return false;
+	HANDLE hProc = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+	if (!hProc)
+	{
+		// Access denied means the process exists (e.g., protected/elevated process)
+		return GetLastError () == ERROR_ACCESS_DENIED;
+	}
+	DWORD code = 0;
+	bool alive = GetExitCodeProcess (hProc, &code) && (code == STILL_ACTIVE);
+	CloseHandle (hProc);
+	return alive;
+}
+
+struct UwpChildFindCtx
+{
+	DWORD hostPid;
+	DWORD childPid;
+};
+
+BOOL CALLBACK FindUwpChildPidProc (HWND child, LPARAM lparam)
+{
+	auto *ctx = reinterpret_cast<UwpChildFindCtx *>(lparam);
+	DWORD pid = 0;
+	GetWindowThreadProcessId (child, &pid);
+	if (pid && pid != ctx->hostPid)
+	{
+		ctx->childPid = pid;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+std::wstring PrettyAppLabelFromPath (const std::wstring &path)
+{
+	std::wstring fn = ExtractFileName (path);
+	if (fn.size () > 4 && ToLower (fn.substr (fn.size () - 4)) == L".exe")
+		fn = fn.substr (0, fn.size () - 4);
+	return fn;
+}
+
+void CALLBACK ForegroundWinEventProc (
+	HWINEVENTHOOK hWinEventHook,
+	DWORD event,
+	HWND fgHwnd,
+	LONG idObject,
+	LONG idChild,
+	DWORD idEventThread,
+	DWORD dwmsEventTime
+)
+{
+	UNREFERENCED_PARAMETER (hWinEventHook);
+	UNREFERENCED_PARAMETER (idObject);
+	UNREFERENCED_PARAMETER (idChild);
+	UNREFERENCED_PARAMETER (idEventThread);
+	UNREFERENCED_PARAMETER (dwmsEventTime);
+
+	if (event != EVENT_SYSTEM_FOREGROUND || !fgHwnd || !IsWindow (fgHwnd))
+		return;
+
+	if (!g_active.load () || !_modern_alert_isready ())
+		return;
+
+	// Ignore our own windows (main window / alert popup)
+	DWORD fgPid = 0;
+	GetWindowThreadProcessId (fgHwnd, &fgPid);
+	if (!fgPid || fgPid == GetCurrentProcessId ())
+		return;
+
+	std::wstring fgPath = GetProcessImagePathByPid (fgPid);
+	if (fgPath.empty ())
+		return;
+
+	std::wstring fgLow = ToLower (fgPath);
+
+	// Resolve real UWP app hosted inside ApplicationFrameHost.exe
+	if (fgLow.ends_with (L"\\applicationframehost.exe"))
+	{
+		UwpChildFindCtx ctx = { fgPid, 0 };
+		EnumChildWindows (fgHwnd, FindUwpChildPidProc, reinterpret_cast<LPARAM>(&ctx));
+		if (ctx.childPid)
+		{
+			std::wstring childPath = GetProcessImagePathByPid (ctx.childPid);
+			if (!childPath.empty ())
+			{
+				fgPid = ctx.childPid;
+				fgPath = std::move (childPath);
+				fgLow = ToLower (fgPath);
+			}
+		}
+	}
+
+	// Ignore Windows shell chrome & system task UI
+	static const wchar_t *kIgnoredShell[] = {
+		L"\\explorer.exe",
+		L"\\searchhost.exe",
+		L"\\searchapp.exe",
+		L"\\startmenuexperiencehost.exe",
+		L"\\shellexperiencehost.exe",
+		L"\\lockapp.exe",
+		L"\\taskmgr.exe",
+		L"\\applicationframehost.exe",
+		L"\\simplewall.exe"
+	};
+	for (const wchar_t *ign : kIgnoredShell)
+	{
+		if (fgLow.ends_with (ign))
+			return;
+	}
+
+	std::wstring fgSuite = ExtractSuiteKey (fgPath);
+	std::wstring fgLabel = PrettyAppLabelFromPath (fgPath);
+	ULONGLONG now = GetTickCount64 ();
+
+	MODERN_APP_SNAPSHOT *apps = nullptr;
+	SIZE_T appCount = 0;
+	if (!_modern_bridge_get_apps (&apps, &appCount) || !apps)
+		return;
+
+	for (SIZE_T i = 0; i < appCount; ++i)
+	{
+		const auto &a = apps[i];
+		if (a.is_enabled || !a.is_ask_on_use)
+			continue;
+
+		std::wstring appPath (a.path);
+		if (appPath.empty ())
+			continue;
+
+		std::wstring appLow = ToLower (appPath);
+		std::wstring trigLow = ToLower (std::wstring (a.wake_trigger));
+
+		bool isDirect = (appLow == fgLow);
+		bool isManual = (!isDirect && !trigLow.empty () && trigLow == fgLow);
+		bool isSuite = false;
+		if (!isDirect && !isManual && trigLow.empty () && !fgSuite.empty ())
+		{
+			std::wstring appSuite = ExtractSuiteKey (appPath);
+			if (!appSuite.empty () && appSuite == fgSuite)
+				isSuite = true;
+		}
+
+		if (!isDirect && !isManual && !isSuite)
+			continue;
+
+		// Skip if already visible/queued in the alert popup
+		bool alreadyQueued = false;
+		for (const auto &q : g_alertQueue)
+		{
+			if (q.appHash == a.app_hash) { alreadyQueued = true; break; }
+		}
+		if (alreadyQueued)
+			continue;
+
+		std::lock_guard<std::mutex> lock (g_standbyMutex);
+		auto &st = g_standbyState[a.app_hash];
+
+		// Avoid Alt-Tab re-nagging while the exact same opened process is still alive
+		if (st.handledPid == fgPid)
+			continue;
+
+		if (st.lastPromptTick && (now - st.lastPromptTick) < 8000)
+			continue;
+
+		st.armedUntilTick = now + 180000; // 3-minute armed window
+		st.promptedThisArm = false;
+		st.triggerPid = fgPid;
+		st.triggerPathLow = fgLow;
+		st.wakeSourceName = isDirect ? L"" : fgLabel;
+		st.isDirectWake = isDirect;
+		st.isManualTriggerWake = isManual;
+		// Hybrid wake-up: wait 700ms so a live WFP drop wins with exact remote IP/port;
+		// if none fires within 700ms, the monitor timer prompts right away.
+		st.pendingPromptAtTick = now + 700;
+	}
+
+	_modern_bridge_free_apps (apps);
+}
+
+void CALLBACK WakeMonitorTimerProc (
+	HWND hwnd,
+	UINT msg,
+	UINT_PTR timerId,
+	DWORD dwTime
+)
+{
+	UNREFERENCED_PARAMETER (hwnd);
+	UNREFERENCED_PARAMETER (msg);
+	UNREFERENCED_PARAMETER (timerId);
+	UNREFERENCED_PARAMETER (dwTime);
+
+	if (!g_active.load ())
+		return;
+
+	ULONGLONG now = GetTickCount64 ();
+	g_wakeMonitorTickCount++;
+
+	// 1. Collect hybrid pending wake-up prompts & prune exited handledPids
+	struct PendingPrompt
+	{
+		ULONG_PTR appHash;
+		std::wstring remoteAddr;
+		UINT16 remotePort;
+		std::wstring protocol;
+		std::wstring wakeSource;
+		bool requireRunningOrBlocked;
+	};
+	std::vector<PendingPrompt> toPrompt;
+
+	{
+		std::lock_guard<std::mutex> lock (g_standbyMutex);
+		for (auto &kv : g_standbyState)
+		{
+			auto &st = kv.second;
+
+			// Every 3 seconds, reset handledPid once that opened process has actually exited
+			if ((g_wakeMonitorTickCount % 3 == 0) && st.handledPid != 0)
+			{
+				if (!IsPidStillAlive (st.handledPid))
+				{
+					st.handledPid = 0;
+					st.promptedThisArm = false;
+				}
+			}
+
+			if (st.pendingPromptAtTick != 0 && now >= st.pendingPromptAtTick && !st.promptedThisArm)
+			{
+				bool hadSuppressedBlock = (st.lastBlockedTick != 0);
+				PendingPrompt p;
+				p.appHash = kv.first;
+				p.remoteAddr = st.lastRemoteAddr;
+				p.remotePort = st.lastRemotePort;
+				p.protocol = st.lastProtocol;
+				p.wakeSource = st.wakeSourceName;
+				p.requireRunningOrBlocked = !(st.isDirectWake || st.isManualTriggerWake || hadSuppressedBlock);
+
+				st.pendingPromptAtTick = 0;
+				st.promptedThisArm = true;
+				st.lastPromptTick = now;
+				if (st.triggerPid)
+					st.handledPid = st.triggerPid;
+
+				toPrompt.push_back (std::move (p));
+			}
+		}
+	}
+
+	// 2. Check if any apps are in "Allow Until Closed" or need running-status check
+	bool checkSessions = (g_wakeMonitorTickCount % 3 == 0);
+	bool needRunningSet = false;
+	for (const auto &p : toPrompt)
+	{
+		if (p.requireRunningOrBlocked) { needRunningSet = true; break; }
+	}
+
+	std::unordered_set<std::wstring> runningPaths;
+	MODERN_APP_SNAPSHOT *apps = nullptr;
+	SIZE_T appCount = 0;
+
+	if (checkSessions || needRunningSet)
+	{
+		if (_modern_bridge_get_apps (&apps, &appCount) && apps)
+		{
+			bool hasSessionApps = false;
+			if (checkSessions)
+			{
+				for (SIZE_T i = 0; i < appCount; ++i)
+				{
+					if (apps[i].is_enabled && apps[i].is_allow_until_closed)
+					{
+						hasSessionApps = true;
+						break;
+					}
+				}
+			}
+
+			if (hasSessionApps || needRunningSet)
+				runningPaths = GetRunningProcessPaths ();
+
+			// Fire pending hybrid prompts
+			for (const auto &p : toPrompt)
+			{
+				bool okToPrompt = !p.requireRunningOrBlocked;
+				if (!okToPrompt)
+				{
+					for (SIZE_T i = 0; i < appCount; ++i)
+					{
+						if (apps[i].app_hash == p.appHash)
+						{
+							std::wstring lowP = ToLower (std::wstring (apps[i].path));
+							if (!lowP.empty () && runningPaths.find (lowP) != runningPaths.end ())
+								okToPrompt = true;
+							break;
+						}
+					}
+				}
+
+				if (okToPrompt)
+				{
+					_modern_bridge_prompt_standby_app (
+						g_hwnd,
+						p.appHash,
+						p.remoteAddr.empty () ? nullptr : p.remoteAddr.c_str (),
+						p.remotePort,
+						p.protocol.empty () ? nullptr : p.protocol.c_str (),
+						p.wakeSource.empty () ? nullptr : p.wakeSource.c_str ()
+					);
+				}
+			}
+
+			// Re-block "Allow Until Closed" apps once they (or their wake trigger) exit
+			if (hasSessionApps)
+			{
+				std::vector<ULONG_PTR> toReblock;
+				for (SIZE_T i = 0; i < appCount; ++i)
+				{
+					const auto &a = apps[i];
+					if (!a.is_enabled || !a.is_allow_until_closed)
+						continue;
+
+					std::wstring watchLow;
+					ULONGLONG allowedAt = 0;
+					{
+						std::lock_guard<std::mutex> lock (g_standbyMutex);
+						auto &st = g_standbyState[a.app_hash];
+						if (st.sessionAllowedAtTick == 0)
+							st.sessionAllowedAtTick = now;
+						allowedAt = st.sessionAllowedAtTick;
+						watchLow = st.sessionWatchPathLow;
+					}
+
+					// 12-second grace period after allowing so reopening/launching finishes
+					if (now - allowedAt < 12000)
+						continue;
+
+					if (watchLow.empty () && a.wake_trigger[0])
+						watchLow = ToLower (std::wstring (a.wake_trigger));
+					if (watchLow.empty ())
+						watchLow = ToLower (std::wstring (a.path));
+
+					if (!watchLow.empty () && runningPaths.find (watchLow) == runningPaths.end ())
+					{
+						toReblock.push_back (a.app_hash);
+					}
+				}
+
+				for (ULONG_PTR h : toReblock)
+				{
+					{
+						std::lock_guard<std::mutex> lock (g_standbyMutex);
+						auto &st = g_standbyState[h];
+						st.handledPid = 0;
+						st.promptedThisArm = false;
+						st.armedUntilTick = 0;
+						st.pendingPromptAtTick = 0;
+						st.sessionWatchPathLow.clear ();
+						st.sessionAllowedAtTick = 0;
+					}
+					_modern_bridge_reblock_session_app (g_hwnd, h);
+				}
+			}
+
+			_modern_bridge_free_apps (apps);
+		}
+	}
+	else if (!toPrompt.empty ())
+	{
+		for (const auto &p : toPrompt)
+		{
+			_modern_bridge_prompt_standby_app (
+				g_hwnd,
+				p.appHash,
+				p.remoteAddr.empty () ? nullptr : p.remoteAddr.c_str (),
+				p.remotePort,
+				p.protocol.empty () ? nullptr : p.protocol.c_str (),
+				p.wakeSource.empty () ? nullptr : p.wakeSource.c_str ()
+			);
+		}
+	}
+}
+
+void StartStandbyWatcher (HWND hwnd)
+{
+	if (!g_fgHook)
+	{
+		g_fgHook = SetWinEventHook (
+			EVENT_SYSTEM_FOREGROUND,
+			EVENT_SYSTEM_FOREGROUND,
+			nullptr,
+			ForegroundWinEventProc,
+			0,
+			0,
+			WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+		);
+	}
+	if (hwnd && IsWindow (hwnd))
+	{
+		SetTimer (hwnd, kWakeMonitorTimerId, 1000, WakeMonitorTimerProc);
+	}
+}
+
+void StopStandbyWatcher (HWND hwnd)
+{
+	if (g_fgHook)
+	{
+		UnhookWinEvent (g_fgHook);
+		g_fgHook = nullptr;
+	}
+	if (hwnd && IsWindow (hwnd))
+	{
+		KillTimer (hwnd, kWakeMonitorTimerId);
+	}
+}
+
 } // namespace
 
 extern "C"
@@ -3827,6 +4758,7 @@ BOOLEAN _modern_ui_init (
 	// Hide legacy Win32 controls IMMEDIATELY before first paint so the old UI never flashes!
 	_modern_bridge_hide_legacy_controls (hwnd);
 	_modern_ui_apply_titlebar_theme (hwnd);
+	StartStandbyWatcher (hwnd);
 	WriteAuditLogLine (L"START", L"simplewall v" APP_FORK_VERSION L" started");
 
 	// Ensure a generous comfortable window size on first launch
@@ -3882,6 +4814,7 @@ VOID _modern_ui_destroy (
 	VOID
 )
 {
+	StopStandbyWatcher (g_hwnd);
 	g_active.store (false);
 	g_alertReady.store (false);
 	g_alertHtmlReady.store (false);
@@ -4011,6 +4944,47 @@ BOOLEAN _modern_alert_isready (
 	return (g_alertReady.load () && g_alertHwnd && IsWindow (g_alertHwnd)) ? TRUE : FALSE;
 }
 
+VOID _modern_ui_record_standby_block (
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR remote_addr,
+	_In_ UINT16 remote_port,
+	_In_opt_ LPCWSTR protocol
+)
+{
+	if (!app_hash) return;
+	std::lock_guard<std::mutex> lock (g_standbyMutex);
+	auto &st = g_standbyState[app_hash];
+	if (remote_addr && remote_addr[0]) st.lastRemoteAddr = remote_addr;
+	st.lastRemotePort = remote_port;
+	if (protocol && protocol[0]) st.lastProtocol = protocol;
+	st.lastBlockedTick = GetTickCount64 ();
+}
+
+BOOLEAN _modern_ui_consume_standby_arm (
+	_In_ ULONG_PTR app_hash
+)
+{
+	if (!app_hash) return FALSE;
+	ULONGLONG now = GetTickCount64 ();
+	std::lock_guard<std::mutex> lock (g_standbyMutex);
+	auto it = g_standbyState.find (app_hash);
+	if (it == g_standbyState.end ())
+		return FALSE;
+
+	auto &st = it->second;
+	if (st.armedUntilTick > now && !st.promptedThisArm)
+	{
+		st.promptedThisArm = true;
+		st.pendingPromptAtTick = 0;
+		st.lastPromptTick = now;
+		if (st.triggerPid)
+			st.handledPid = st.triggerPid;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
 BOOLEAN _modern_alert_enqueue (
 	_In_ ULONG_PTR app_hash,
 	_In_opt_ LPCWSTR name,
@@ -4019,7 +4993,9 @@ BOOLEAN _modern_alert_enqueue (
 	_In_opt_ LPCWSTR remote_addr,
 	_In_ UINT16 remote_port,
 	_In_opt_ LPCWSTR protocol,
-	_In_ BOOLEAN can_reopen
+	_In_ BOOLEAN can_reopen,
+	_In_opt_ LPCWSTR wake_source,
+	_In_ BOOLEAN is_ask_on_use
 )
 {
 	if (!_modern_alert_isready ())
@@ -4034,6 +5010,19 @@ BOOLEAN _modern_alert_enqueue (
 	item.remotePort = remote_port;
 	if (protocol) item.protocol = protocol;
 	item.canReopen = (can_reopen != FALSE);
+	item.isAskOnUse = (is_ask_on_use != FALSE);
+
+	if (wake_source && wake_source[0])
+	{
+		item.wakeSource = wake_source;
+	}
+	else if (is_ask_on_use)
+	{
+		std::lock_guard<std::mutex> lock (g_standbyMutex);
+		auto it = g_standbyState.find (app_hash);
+		if (it != g_standbyState.end () && !it->second.wakeSourceName.empty ())
+			item.wakeSource = it->second.wakeSourceName;
+	}
 
 	bool wasEmpty = g_alertQueue.empty ();
 	bool updated = false;

@@ -26,6 +26,9 @@ VOID NTAPI _app_dereferenceapp (
 	if (ptr_item->notification)
 		_r_obj_dereference (ptr_item->notification);
 
+	if (ptr_item->wake_trigger)
+		_r_obj_dereference (ptr_item->wake_trigger);
+
 	if (ptr_item->guids)
 		_r_obj_dereference (ptr_item->guids);
 }

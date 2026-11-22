@@ -155,6 +155,39 @@ BOOLEAN _app_getappinfo (
 
 			return TRUE;
 		}
+
+		case INFO_IS_ASK_ON_USE:
+		{
+			BOOLEAN is_ask_on_use;
+
+			if (length != sizeof (BOOLEAN))
+				return FALSE;
+
+			is_ask_on_use = !!ptr_app->is_ask_on_use;
+
+			RtlCopyMemory (buffer, &is_ask_on_use, length);
+
+			return TRUE;
+		}
+
+		case INFO_WAKE_TRIGGER:
+		{
+			PR_STRING wake_trigger;
+
+			if (length != sizeof (PR_STRING))
+				return FALSE;
+
+			if (!_r_obj_isstringempty (ptr_app->wake_trigger))
+			{
+				wake_trigger = _r_obj_reference (ptr_app->wake_trigger);
+
+				RtlCopyMemory (buffer, &wake_trigger, length);
+
+				return TRUE;
+			}
+
+			break;
+		}
 	}
 
 	return FALSE;
@@ -293,6 +326,18 @@ VOID _app_setappinfo (
 		case INFO_IS_UNDELETABLE:
 		{
 			ptr_app->is_undeletable = (PtrToInt (value) ? TRUE : FALSE);
+			break;
+		}
+
+		case INFO_IS_ASK_ON_USE:
+		{
+			ptr_app->is_ask_on_use = (PtrToInt (value) ? TRUE : FALSE);
+			break;
+		}
+
+		case INFO_WAKE_TRIGGER:
+		{
+			_r_obj_movereference (&ptr_app->wake_trigger, value);
 			break;
 		}
 	}
@@ -1481,7 +1526,7 @@ BOOLEAN _app_isappused (
 	_In_ PITEM_APP ptr_app
 )
 {
-	if (ptr_app->is_enabled || ptr_app->is_silent || ptr_app->is_undeletable)
+	if (ptr_app->is_enabled || ptr_app->is_silent || ptr_app->is_undeletable || ptr_app->is_ask_on_use)
 		return TRUE;
 
 	if (_app_isapphaverule (ptr_app->app_hash, TRUE))

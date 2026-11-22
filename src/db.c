@@ -236,6 +236,7 @@ VOID _app_db_parse_app (
 	BOOLEAN is_undeletable;
 	BOOLEAN is_enabled;
 	BOOLEAN is_silent;
+	BOOLEAN is_ask_on_use;
 
 	path = _r_xml_getattribute_string (&db_info->xml_library, L"path");
 
@@ -265,6 +266,7 @@ VOID _app_db_parse_app (
 				is_enabled = _r_xml_getattribute_boolean (&db_info->xml_library, L"is_enabled");
 				is_silent = _r_xml_getattribute_boolean (&db_info->xml_library, L"is_silent");
 				is_undeletable = _r_xml_getattribute_boolean (&db_info->xml_library, L"is_undeletable");
+				is_ask_on_use = _r_xml_getattribute_boolean (&db_info->xml_library, L"is_ask_on_use");
 
 				timestamp = _r_xml_getattribute_long64 (&db_info->xml_library, L"timestamp");
 				timer = _r_xml_getattribute_long64 (&db_info->xml_library, L"timer");
@@ -297,8 +299,25 @@ VOID _app_db_parse_app (
 					}
 				}
 
+				string = _r_xml_getattribute_string (&db_info->xml_library, L"wake_trigger");
+
+				if (string)
+				{
+					if (!_r_obj_isstringempty2 (string))
+					{
+						_app_setappinfo (ptr_app, INFO_WAKE_TRIGGER, string);
+					}
+					else
+					{
+						_r_obj_dereference (string);
+					}
+				}
+
 				if (is_silent)
 					_app_setappinfo (ptr_app, INFO_IS_SILENT, IntToPtr (is_silent));
+
+				if (is_ask_on_use)
+					_app_setappinfo (ptr_app, INFO_IS_ASK_ON_USE, IntToPtr (is_ask_on_use));
 
 				if (is_enabled)
 					_app_setappinfo (ptr_app, INFO_IS_ENABLED, IntToPtr (is_enabled));
@@ -1050,6 +1069,9 @@ VOID _app_db_save_app (
 		if (!_r_obj_isstringempty (ptr_app->comment))
 			_r_xml_setattribute (&db_info->xml_library, L"comment", ptr_app->comment->buffer);
 
+		if (!_r_obj_isstringempty (ptr_app->wake_trigger))
+			_r_xml_setattribute (&db_info->xml_library, L"wake_trigger", ptr_app->wake_trigger->buffer);
+
 		if (ptr_app->timestamp)
 			_r_xml_setattribute_long64 (&db_info->xml_library, L"timestamp", ptr_app->timestamp);
 
@@ -1064,11 +1086,23 @@ VOID _app_db_save_app (
 		if (ptr_app->is_undeletable)
 			_r_xml_setattribute_boolean (&db_info->xml_library, L"is_undeletable", !!ptr_app->is_undeletable);
 
-		if (ptr_app->is_silent)
-			_r_xml_setattribute_boolean (&db_info->xml_library, L"is_silent", !!ptr_app->is_silent);
+		if (ptr_app->is_allow_until_closed)
+		{
+			// Session-only allow should persist as Block Until Used across restarts
+			_r_xml_setattribute_boolean (&db_info->xml_library, L"is_silent", TRUE);
+			_r_xml_setattribute_boolean (&db_info->xml_library, L"is_ask_on_use", TRUE);
+		}
+		else
+		{
+			if (ptr_app->is_silent)
+				_r_xml_setattribute_boolean (&db_info->xml_library, L"is_silent", !!ptr_app->is_silent);
 
-		if (ptr_app->is_enabled)
-			_r_xml_setattribute_boolean (&db_info->xml_library, L"is_enabled", !!ptr_app->is_enabled);
+			if (ptr_app->is_ask_on_use)
+				_r_xml_setattribute_boolean (&db_info->xml_library, L"is_ask_on_use", !!ptr_app->is_ask_on_use);
+
+			if (ptr_app->is_enabled)
+				_r_xml_setattribute_boolean (&db_info->xml_library, L"is_enabled", !!ptr_app->is_enabled);
+		}
 
 		_r_xml_writeendelement (&db_info->xml_library);
 	}

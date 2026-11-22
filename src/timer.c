@@ -102,6 +102,10 @@ VOID _app_timer_reset (
 {
 	ptr_app->is_enabled = FALSE;
 	ptr_app->is_haveerrors = FALSE;
+	ptr_app->is_allow_until_closed = FALSE;
+
+	if (ptr_app->is_ask_on_use)
+		ptr_app->is_silent = TRUE;
 
 	ptr_app->timer = 0;
 
@@ -164,8 +168,6 @@ VOID CALLBACK _app_timer_callback (
 
 	_app_listview_updateby_id (hwnd, ptr_app->type, PR_UPDATE_TYPE | PR_UPDATE_FORCE);
 
-	_r_obj_dereference (ptr_app);
-
 	_app_profile_save (hwnd);
 
 	_modern_ui_notify_change ();
@@ -192,6 +194,8 @@ VOID CALLBACK _app_timer_callback (
 		if (string)
 			_r_obj_dereference (string);
 	}
+
+	_r_obj_dereference (ptr_app);
 
 	if (status == S_OK || status == S_FALSE)
 		CoUninitialize ();

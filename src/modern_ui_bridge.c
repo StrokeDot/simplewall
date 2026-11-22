@@ -91,6 +91,11 @@ BOOLEAN _modern_bridge_get_apps (
 			dst->is_blocked = _app_isappblocked (ptr_app);
 			dst->is_silent = !!ptr_app->is_silent;
 			dst->is_system = _app_isdisabledremoval (ptr_app->app_hash);
+			dst->is_ask_on_use = !!ptr_app->is_ask_on_use;
+			dst->is_allow_until_closed = !!ptr_app->is_allow_until_closed;
+
+			if (ptr_app->wake_trigger && !_r_obj_isstringempty (ptr_app->wake_trigger))
+				_modern_copy_wstr (dst->wake_trigger, RTL_NUMBER_OF (dst->wake_trigger), ptr_app->wake_trigger->buffer);
 			if (ptr_app->type == DATA_APP_REGULAR && !dst->is_system)
 			{
 				dst->exists = (ptr_app->real_path && _r_fs_exists (&ptr_app->real_path->sr)) ? TRUE : FALSE;
@@ -188,7 +193,8 @@ VOID _modern_bridge_set_mode (
 VOID _modern_bridge_allow_app (
 	_In_ HWND hwnd,
 	_In_ ULONG_PTR app_hash,
-	_In_ LONG64 duration_seconds
+	_In_ LONG64 duration_seconds,
+	_In_ BOOLEAN until_closed
 )
 {
 	PITEM_APP ptr_app;
@@ -204,14 +210,30 @@ VOID _modern_bridge_allow_app (
 	ptr_app->is_silent = FALSE;
 	ptr_app->is_haveerrors = FALSE;
 
-	if (duration_seconds > 0)
+	if (until_closed)
 	{
+		if (_app_istimerset (ptr_app))
+		{
+			_app_timer_remove (ptr_app);
+			ptr_app->timer = 0;
+		}
+		ptr_app->is_allow_until_closed = TRUE;
+		ptr_app->is_ask_on_use = TRUE;
+	}
+	else if (duration_seconds > 0)
+	{
+		ptr_app->is_allow_until_closed = FALSE;
 		_app_timer_set (hwnd, ptr_app, duration_seconds);
 	}
-	else if (_app_istimerset (ptr_app))
+	else
 	{
-		_app_timer_remove (ptr_app);
-		ptr_app->timer = 0;
+		ptr_app->is_allow_until_closed = FALSE;
+		ptr_app->is_ask_on_use = FALSE;
+		if (_app_istimerset (ptr_app))
+		{
+			_app_timer_remove (ptr_app);
+			ptr_app->timer = 0;
+		}
 	}
 
 	if (_wfp_isfiltersinstalled ())
@@ -231,7 +253,9 @@ VOID _modern_bridge_allow_app (
 	{
 		WCHAR log_buf[640];
 		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
-		if (duration_seconds > 0)
+		if (until_closed)
+			_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Allowed until closed: %s", p);
+		else if (duration_seconds > 0)
 			_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Allowed temporarily (%lldm): %s", duration_seconds / 60, p);
 		else
 			_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Allowed app: %s", p);
@@ -245,7 +269,8 @@ VOID _modern_bridge_allow_app (
 
 VOID _modern_bridge_block_app (
 	_In_ HWND hwnd,
-	_In_ ULONG_PTR app_hash
+	_In_ ULONG_PTR app_hash,
+	_In_ BOOLEAN ask_on_use
 )
 {
 	PITEM_APP ptr_app;
@@ -263,6 +288,8 @@ VOID _modern_bridge_block_app (
 	ptr_app->timer = 0;
 	ptr_app->is_enabled = FALSE;
 	ptr_app->is_silent = TRUE;
+	ptr_app->is_ask_on_use = ask_on_use ? TRUE : FALSE;
+	ptr_app->is_allow_until_closed = FALSE;
 	ptr_app->is_haveerrors = FALSE;
 
 	if (_wfp_isfiltersinstalled ())
@@ -282,8 +309,93 @@ VOID _modern_bridge_block_app (
 	{
 		WCHAR log_buf[640];
 		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
-		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Blocked app: %s", p);
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), ask_on_use ? L"Blocked app (Ask on Open): %s" : L"Blocked app (Always): %s", p);
 		_modern_ui_log_event (L"BLOCK", log_buf);
+	}
+
+	_r_obj_dereference (ptr_app);
+
+	_modern_ui_notify_change ();
+}
+
+VOID _modern_bridge_set_wake_trigger (
+	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR trigger_path
+)
+{
+	PITEM_APP ptr_app;
+	PR_STRING str = NULL;
+
+	ptr_app = _app_getappitem (app_hash);
+
+	if (!ptr_app)
+		return;
+
+	if (trigger_path && trigger_path[0])
+		str = _r_obj_createstring (trigger_path);
+
+	_app_setappinfo (ptr_app, INFO_WAKE_TRIGGER, str);
+
+	_app_profile_save (hwnd);
+
+	{
+		WCHAR log_buf[640];
+		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Updated wake trigger for %s -> %s", p, (trigger_path && trigger_path[0]) ? trigger_path : L"Auto (Suite)");
+		_modern_ui_log_event (L"STANDBY", log_buf);
+	}
+
+	_r_obj_dereference (ptr_app);
+
+	_modern_ui_notify_change ();
+}
+
+VOID _modern_bridge_reblock_session_app (
+	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash
+)
+{
+	PITEM_APP ptr_app;
+	PR_LIST rules;
+	HANDLE hengine;
+
+	ptr_app = _app_getappitem (app_hash);
+
+	if (!ptr_app)
+		return;
+
+	if (!ptr_app->is_allow_until_closed)
+	{
+		_r_obj_dereference (ptr_app);
+		return;
+	}
+
+	ptr_app->is_enabled = FALSE;
+	ptr_app->is_silent = TRUE;
+	ptr_app->is_ask_on_use = TRUE;
+	ptr_app->is_allow_until_closed = FALSE;
+	ptr_app->is_haveerrors = FALSE;
+
+	if (_wfp_isfiltersinstalled ())
+	{
+		hengine = _wfp_getenginehandle ();
+		rules = _r_obj_createlist (2, NULL);
+
+		_r_obj_addlistitem (rules, ptr_app);
+		_wfp_create3filters (hengine, rules, DBG_ARG, FALSE);
+
+		_r_obj_dereference (rules);
+	}
+
+	_app_listview_updateitemby_param (hwnd, app_hash, TRUE);
+	_app_profile_save (hwnd);
+
+	{
+		WCHAR log_buf[640];
+		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Session ended — returned to Block Until Used: %s", p);
+		_modern_ui_log_event (L"STANDBY", log_buf);
 	}
 
 	_r_obj_dereference (ptr_app);
@@ -595,7 +707,92 @@ BOOLEAN _modern_bridge_show_alert (
 		remote_str,
 		ptr_log->remote_port,
 		proto_str,
-		can_reopen
+		can_reopen,
+		NULL,
+		!!ptr_app->is_ask_on_use
+	);
+
+	if (ptr_info)
+		_r_obj_dereference (ptr_info);
+
+	if (app_name)
+		_r_obj_dereference (app_name);
+
+	_r_obj_dereference (ptr_app);
+
+	return ok;
+}
+
+BOOLEAN _modern_bridge_prompt_standby_app (
+	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR remote_addr,
+	_In_ UINT16 remote_port,
+	_In_opt_ LPCWSTR protocol,
+	_In_opt_ LPCWSTR wake_source
+)
+{
+	PITEM_APP ptr_app;
+	PITEM_APP_INFO ptr_info;
+	PR_STRING app_name = NULL;
+	LPCWSTR path_str = NULL;
+	LPCWSTR sig_str = NULL;
+	BOOLEAN can_reopen = FALSE;
+	BOOLEAN ok;
+
+	UNREFERENCED_PARAMETER (hwnd);
+
+	if (!app_hash || !_modern_alert_isready ())
+		return FALSE;
+
+	if (!_r_config_getboolean (L"IsNotificationsEnabled", TRUE) || _wfp_issafepause ())
+		return FALSE;
+
+	ptr_app = _app_getappitem (app_hash);
+
+	if (!ptr_app)
+		return FALSE;
+
+	if (ptr_app->is_enabled || !ptr_app->is_ask_on_use)
+	{
+		_r_obj_dereference (ptr_app);
+		return FALSE;
+	}
+
+	app_name = _app_getappdisplayname (ptr_app, TRUE);
+
+	if (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path))
+		path_str = ptr_app->real_path->buffer;
+	else if (ptr_app->original_path && !_r_obj_isstringempty (ptr_app->original_path))
+		path_str = ptr_app->original_path->buffer;
+
+	ptr_info = _app_getappinfobyhash2 (ptr_app->app_hash);
+
+	if (ptr_info && ptr_info->signature_info && !_r_obj_isstringempty (ptr_info->signature_info))
+		sig_str = ptr_info->signature_info->buffer;
+
+	if (ptr_app->type == DATA_APP_REGULAR &&
+		!_app_isdisabledremoval (ptr_app->app_hash) &&
+		!_app_isappfromsystem (ptr_app->real_path, ptr_app->app_hash) &&
+		_app_isappexists (ptr_app) &&
+		path_str && path_str[0])
+	{
+		can_reopen = TRUE;
+	}
+
+	ptr_app->last_notify = _r_unixtime_now ();
+
+	ok = _modern_alert_enqueue (
+		ptr_app->app_hash,
+		app_name ? app_name->buffer : NULL,
+		path_str,
+		sig_str,
+		(remote_addr && remote_addr[0]) ? remote_addr : L"App opened — awaiting authorization",
+		remote_port,
+		protocol,
+		can_reopen,
+		wake_source,
+		TRUE
 	);
 
 	if (ptr_info)
@@ -612,7 +809,7 @@ BOOLEAN _modern_bridge_show_alert (
 VOID _modern_bridge_notify_decision (
 	_In_ HWND hwnd,
 	_In_ ULONG_PTR app_hash,
-	_In_ BOOLEAN is_allow,
+	_In_ INT decision_mode,
 	_In_ LONG64 duration_seconds,
 	_In_ BOOLEAN reopen_app
 )
@@ -621,6 +818,7 @@ VOID _modern_bridge_notify_decision (
 	PR_LIST rules;
 	HANDLE hengine;
 	WCHAR reopen_path[520] = {0};
+	BOOLEAN is_allow = (decision_mode == 1 || decision_mode == 3);
 
 	ptr_app = _app_getappitem (app_hash);
 
@@ -632,33 +830,71 @@ VOID _modern_bridge_notify_decision (
 
 	ptr_app->last_notify = _r_unixtime_now ();
 
-	if (is_allow)
+	if (decision_mode == 3)
+	{
+		// Allow until closed (returns to Block Until Used when closed)
+		if (_app_istimerset (ptr_app))
+		{
+			_app_timer_remove (ptr_app);
+			ptr_app->timer = 0;
+		}
+		ptr_app->is_enabled = TRUE;
+		ptr_app->is_silent = FALSE;
+		ptr_app->is_ask_on_use = TRUE;
+		ptr_app->is_allow_until_closed = TRUE;
+		ptr_app->is_haveerrors = FALSE;
+
+		if (reopen_app && ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path))
+			_modern_copy_wstr (reopen_path, RTL_NUMBER_OF (reopen_path), ptr_app->real_path->buffer);
+	}
+	else if (decision_mode == 1)
 	{
 		ptr_app->is_enabled = TRUE;
 		ptr_app->is_silent = FALSE;
+		ptr_app->is_allow_until_closed = FALSE;
 		ptr_app->is_haveerrors = FALSE;
 
 		if (duration_seconds > 0)
 		{
 			_app_timer_set (hwnd, ptr_app, duration_seconds);
 		}
-		else if (_app_istimerset (ptr_app))
+		else
 		{
-			_app_timer_remove (ptr_app);
-			ptr_app->timer = 0;
+			ptr_app->is_ask_on_use = FALSE;
+			if (_app_istimerset (ptr_app))
+			{
+				_app_timer_remove (ptr_app);
+				ptr_app->timer = 0;
+			}
 		}
 
 		if (reopen_app && ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path))
 			_modern_copy_wstr (reopen_path, RTL_NUMBER_OF (reopen_path), ptr_app->real_path->buffer);
 	}
-	else
+	else if (decision_mode == 2)
 	{
+		// Block Until Used (Standby Block)
 		if (_app_istimerset (ptr_app))
 			_app_timer_remove (ptr_app);
 
 		ptr_app->timer = 0;
 		ptr_app->is_enabled = FALSE;
 		ptr_app->is_silent = TRUE;
+		ptr_app->is_ask_on_use = TRUE;
+		ptr_app->is_allow_until_closed = FALSE;
+		ptr_app->is_haveerrors = FALSE;
+	}
+	else
+	{
+		// Always Block (Silent)
+		if (_app_istimerset (ptr_app))
+			_app_timer_remove (ptr_app);
+
+		ptr_app->timer = 0;
+		ptr_app->is_enabled = FALSE;
+		ptr_app->is_silent = TRUE;
+		ptr_app->is_ask_on_use = FALSE;
+		ptr_app->is_allow_until_closed = FALSE;
 		ptr_app->is_haveerrors = FALSE;
 	}
 
@@ -679,7 +915,11 @@ VOID _modern_bridge_notify_decision (
 	{
 		WCHAR log_buf[640];
 		LPCWSTR p = (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path)) ? ptr_app->real_path->buffer : L"<unknown>";
-		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Alert decision (%s): %s", is_allow ? (reopen_app ? L"Allow & Reopen" : L"Allow") : L"Block", p);
+		LPCWSTR label = L"Always Block";
+		if (decision_mode == 3) label = L"Allow Until Closed";
+		else if (decision_mode == 2) label = L"Block Until Used";
+		else if (decision_mode == 1) label = reopen_app ? L"Allow & Reopen" : (duration_seconds > 0 ? L"Temp Allow" : L"Allow");
+		_r_str_printf (log_buf, RTL_NUMBER_OF (log_buf), L"Alert decision (%s): %s", label, p);
 		_modern_ui_log_event (is_allow ? L"ALLOW" : L"BLOCK", log_buf);
 	}
 

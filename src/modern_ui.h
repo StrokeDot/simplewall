@@ -16,6 +16,7 @@ typedef struct _MODERN_APP_SNAPSHOT
 	WCHAR name[260];
 	WCHAR path[520];
 	WCHAR signature[260];
+	WCHAR wake_trigger[520];
 	LONG64 timestamp;
 	LONG64 timer_remaining;
 	INT category; // 0=app, 1=uwp, 2=service, 3=system
@@ -24,6 +25,8 @@ typedef struct _MODERN_APP_SNAPSHOT
 	BOOLEAN is_silent;
 	BOOLEAN is_system;
 	BOOLEAN exists;
+	BOOLEAN is_ask_on_use;
+	BOOLEAN is_allow_until_closed;
 } MODERN_APP_SNAPSHOT;
 
 typedef struct _MODERN_STATE_SNAPSHOT
@@ -112,12 +115,34 @@ VOID _modern_bridge_set_mode (
 VOID _modern_bridge_allow_app (
 	_In_ HWND hwnd,
 	_In_ ULONG_PTR app_hash,
-	_In_ LONG64 duration_seconds
+	_In_ LONG64 duration_seconds,
+	_In_ BOOLEAN until_closed
 );
 
 VOID _modern_bridge_block_app (
 	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash,
+	_In_ BOOLEAN ask_on_use
+);
+
+VOID _modern_bridge_set_wake_trigger (
+	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR trigger_path
+);
+
+VOID _modern_bridge_reblock_session_app (
+	_In_ HWND hwnd,
 	_In_ ULONG_PTR app_hash
+);
+
+BOOLEAN _modern_bridge_prompt_standby_app (
+	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR remote_addr,
+	_In_ UINT16 remote_port,
+	_In_opt_ LPCWSTR protocol,
+	_In_opt_ LPCWSTR wake_source
 );
 
 VOID _modern_bridge_delete_apps (
@@ -161,13 +186,27 @@ BOOLEAN _modern_alert_enqueue (
 	_In_opt_ LPCWSTR remote_addr,
 	_In_ UINT16 remote_port,
 	_In_opt_ LPCWSTR protocol,
-	_In_ BOOLEAN can_reopen
+	_In_ BOOLEAN can_reopen,
+	_In_opt_ LPCWSTR wake_source,
+	_In_ BOOLEAN is_ask_on_use
 );
 
+VOID _modern_ui_record_standby_block (
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR remote_addr,
+	_In_ UINT16 remote_port,
+	_In_opt_ LPCWSTR protocol
+);
+
+BOOLEAN _modern_ui_consume_standby_arm (
+	_In_ ULONG_PTR app_hash
+);
+
+// decision_mode: 0=always_block, 1=allow (permanent or timed), 2=ask_on_use, 3=allow_until_closed
 VOID _modern_bridge_notify_decision (
 	_In_ HWND hwnd,
 	_In_ ULONG_PTR app_hash,
-	_In_ BOOLEAN is_allow,
+	_In_ INT decision_mode,
 	_In_ LONG64 duration_seconds,
 	_In_ BOOLEAN reopen_app
 );
