@@ -793,7 +793,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.0</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.1</div>
       </div>
     </div>
 
@@ -896,7 +896,7 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.0.0',
+  appVersion: '4.2.1',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
@@ -904,6 +904,7 @@ const state = {
   search: '',
   filterAllowed: 'all',
   filterBlocked: 'all',
+  hideHarmlessActivity: false,
   includeSystem: false,
   selectedAppId: null,
   cleanupSelected: new Set(),
@@ -1335,49 +1336,79 @@ function selectAllCleanup(select) {
 function renderActivityRow(ev) {
   const app = state.apps.find(a => a.id === ev.appId);
   const name = ev.appName || (app && app.name) || ev.path || 'Unknown';
+  const isAppAllowed = !!(app && app.status === 'allowed');
   const badge = ev.isAllow
     ? `<span class="pill pill-green">Allowed</span>`
-    : `<span class="pill pill-red">Blocked</span>`;
+    : (ev.isHarmless
+      ? `<span class="pill pill-muted">Blocked</span>`
+      : `<span class="pill pill-red">Blocked</span>`);
   const dest = ev.remoteAddr ? `${ev.remoteAddr}${ev.remotePort ? ':' + ev.remotePort : ''}` : 'Local / Unknown';
 
   const countPill = (ev.count && ev.count > 1)
     ? `<span class="pill pill-amber">×${ev.count} tries</span>`
     : '';
 
+  let reasonPill = '';
+  if (!ev.isAllow && ev.reason) {
+    if (ev.isHarmless) {
+      reasonPill = `<span class="pill pill-blue">${esc(ev.reason)} (Harmless)</span>`;
+    } else {
+      reasonPill = `<span class="pill pill-red">${esc(ev.reason)} (Affects App)</span>`;
+    }
+  }
+
+  let actionHtml = '';
+  if (ev.appId && !ev.isAllow) {
+    if (isAppAllowed) {
+      actionHtml = `<span class="pill pill-green">App Allowed</span>`;
+    } else {
+      actionHtml = `<button class="btn btn-sm btn-green" onclick="allowApp('${ev.appId}', 0, event)">Allow</button>`;
+    }
+  } else if (ev.appId && ev.isAllow) {
+    actionHtml = `<button class="btn btn-sm btn-red" onclick="blockApp('${ev.appId}', event)">Block</button>`;
+  }
+
   return `<div class="app-row" onclick="${ev.appId ? `selectApp('${ev.appId}')` : ''}">
     <div class="app-main">
       <div class="app-name-line">
         ${badge}
         <span class="app-name">${esc(name)}</span>
+        ${reasonPill}
         ${countPill}
         <span class="pill pill-muted">${esc(ev.protocol || 'NET')} · ${esc(ev.direction || 'Out')}</span>
       </div>
       <div class="app-sub">${esc(dest)} · ${esc(formatDate(ev.timestamp))}</div>
     </div>
-    <div class="row-actions">
-      ${ev.appId && !ev.isAllow ? `<button class="btn btn-sm btn-green" onclick="allowApp('${ev.appId}', 0, event)">Allow</button>` : ''}
-      ${ev.appId && ev.isAllow ? `<button class="btn btn-sm btn-red" onclick="blockApp('${ev.appId}', event)">Block</button>` : ''}
-    </div>
+    <div class="row-actions">${actionHtml}</div>
   </div>`;
 }
 
 function renderActivity() {
   const q = state.search.trim().toLowerCase();
+  const harmlessCount = state.activity.filter(ev => !ev.isAllow && ev.isHarmless).length;
   const list = state.activity.filter(ev => {
+    if (state.hideHarmlessActivity && !ev.isAllow && ev.isHarmless) return false;
     if (!q) return true;
-    return `${ev.appName} ${ev.path} ${ev.remoteAddr} ${ev.protocol}`.toLowerCase().includes(q);
+    return `${ev.appName} ${ev.path} ${ev.remoteAddr} ${ev.protocol} ${ev.reason || ''}`.toLowerCase().includes(q);
   });
 
   return `
     <div class="page-header">
       <div>
         <div class="page-title">Live Activity</div>
-        <div class="page-sub">Real-time feed of network attempts handled by your firewall. Click any row to inspect the app.</div>
+        <div class="page-sub">Real-time feed of network attempts with plain-English block reasons. Click any row to inspect the app.</div>
       </div>
       <button class="btn" onclick="send('clearActivity')">Clear Feed</button>
     </div>
+    <div class="toolbar-row">
+      <div class="chips">
+        <button class="chip ${!state.hideHarmlessActivity?'active':''}" onclick="state.hideHarmlessActivity=false;renderPage()">All Activity (${state.activity.length})</button>
+        <button class="chip ${state.hideHarmlessActivity?'active':''}" onclick="state.hideHarmlessActivity=!state.hideHarmlessActivity;renderPage()">Hide Harmless Noise${harmlessCount ? ` (${harmlessCount})` : ''}</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-3)">Showing ${list.length} of ${state.activity.length}</div>
+    </div>
     ${list.length ? `<div class="list">${list.map(ev => renderActivityRow(ev)).join('')}</div>`
-      : `<div class="empty"><div class="empty-title">Waiting for activity</div>Blocked and logged connection attempts will show up here automatically.</div>`}
+      : `<div class="empty"><div class="empty-title">${state.hideHarmlessActivity && state.activity.length ? 'No app-affecting blocks!' : 'Waiting for activity'}</div>${state.hideHarmlessActivity && state.activity.length ? 'All recent blocked items were harmless background noise (like local discovery or trackers).' : 'Blocked and logged connection attempts will show up here automatically.'}</div>`}
   `;
 }
 

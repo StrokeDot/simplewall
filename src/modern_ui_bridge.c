@@ -438,6 +438,8 @@ VOID _modern_bridge_push_activity (
 	LPCWSTR remote_str = NULL;
 	LPCWSTR proto_str = NULL;
 	LPCWSTR dir_str = L"Out";
+	LPCWSTR reason_str = NULL;
+	BOOLEAN is_harmless = TRUE;
 
 	if (!ptr_log)
 		return;
@@ -464,6 +466,48 @@ VOID _modern_bridge_push_activity (
 	else if (ptr_log->direction == FWP_DIRECTION_OUTBOUND)
 		dir_str = L"Out";
 
+	if (!ptr_log->is_allow)
+	{
+		UINT16 rp = ptr_log->remote_port;
+		UINT16 lp = ptr_log->local_port;
+		BOOLEAN is_discovery = (rp == 5353 || lp == 5353 || rp == 1900 || lp == 1900 ||
+			rp == 137 || lp == 137 || rp == 138 || lp == 138 || rp == 5355 || lp == 5355);
+		BOOLEAN is_app_allowed = (ptr_app && ptr_app->is_enabled) ? TRUE : FALSE;
+
+		if (ptr_log->is_blocklist)
+		{
+			reason_str = L"Tracker Blocked";
+			is_harmless = TRUE;
+		}
+		else if (is_discovery)
+		{
+			reason_str = L"Local Discovery";
+			is_harmless = TRUE;
+		}
+		else if (ptr_log->direction == FWP_DIRECTION_INBOUND)
+		{
+			reason_str = L"Incoming Blocked";
+			is_harmless = TRUE;
+		}
+		else if (!is_app_allowed)
+		{
+			reason_str = L"App Not Allowed";
+			is_harmless = FALSE;
+		}
+		else if (ptr_log->is_system)
+		{
+			reason_str = L"Firewall Protection";
+			is_harmless = TRUE;
+		}
+		else
+		{
+			reason_str = (ptr_log->filter_name && !_r_obj_isstringempty (ptr_log->filter_name))
+				? ptr_log->filter_name->buffer
+				: L"Firewall Rule";
+			is_harmless = FALSE;
+		}
+	}
+
 	_modern_ui_push_activity_raw (
 		ptr_log->app_hash,
 		app_name ? app_name->buffer : NULL,
@@ -473,7 +517,9 @@ VOID _modern_bridge_push_activity (
 		proto_str,
 		dir_str,
 		ptr_log->is_allow,
-		ptr_log->timestamp
+		ptr_log->timestamp,
+		reason_str,
+		is_harmless
 	);
 
 	if (app_name)

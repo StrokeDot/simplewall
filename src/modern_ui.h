@@ -84,7 +84,9 @@ VOID _modern_ui_push_activity_raw (
 	_In_opt_ LPCWSTR protocol,
 	_In_opt_ LPCWSTR direction,
 	_In_ BOOLEAN is_allow,
-	_In_ LONG64 timestamp
+	_In_ LONG64 timestamp,
+	_In_opt_ LPCWSTR reason,
+	_In_ BOOLEAN is_harmless
 );
 
 // Implemented in modern_ui_bridge.c

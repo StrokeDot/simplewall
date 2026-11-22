@@ -81,6 +81,8 @@ struct ActivityItem
 	bool isAllow = false;
 	LONG64 timestamp = 0;
 	UINT32 count = 1;
+	std::wstring reason;
+	bool isHarmless = false;
 };
 
 struct FileMeta
@@ -904,6 +906,8 @@ std::wstring BuildActivityArrayJson ()
 			<< L",\"isAllow\":" << (ev.isAllow ? L"true" : L"false")
 			<< L",\"timestamp\":" << ev.timestamp
 			<< L",\"count\":" << ev.count
+			<< L",\"reason\":\"" << JsonEscape (ev.reason) << L"\""
+			<< L",\"isHarmless\":" << (ev.isHarmless ? L"true" : L"false")
 			<< L"}";
 	}
 	ss << L"]";
@@ -2806,7 +2810,9 @@ VOID _modern_ui_push_activity_raw (
 	_In_opt_ LPCWSTR protocol,
 	_In_opt_ LPCWSTR direction,
 	_In_ BOOLEAN is_allow,
-	_In_ LONG64 timestamp
+	_In_ LONG64 timestamp,
+	_In_opt_ LPCWSTR reason,
+	_In_ BOOLEAN is_harmless
 )
 {
 	ActivityItem item;
@@ -2819,17 +2825,21 @@ VOID _modern_ui_push_activity_raw (
 	if (direction) item.direction = direction;
 	item.isAllow = (is_allow != FALSE);
 	item.timestamp = timestamp;
+	if (reason) item.reason = reason;
+	item.isHarmless = (is_harmless != FALSE);
 
 	{
 		std::lock_guard<std::mutex> lock (g_activityMutex);
 		bool merged = false;
-		// Collapse repeated identical attempts (same app + destination + allow/block) into a clean counter
+		// Collapse repeated identical attempts (same app + destination + allow/block + direction + reason) into a clean counter
 		for (auto it = g_activity.begin (); it != g_activity.end (); ++it)
 		{
 			if (it->appHash == item.appHash &&
 				it->remoteAddr == item.remoteAddr &&
 				it->remotePort == item.remotePort &&
-				it->isAllow == item.isAllow)
+				it->isAllow == item.isAllow &&
+				it->direction == item.direction &&
+				it->reason == item.reason)
 			{
 				item.count = it->count + 1;
 				g_activity.erase (it);
