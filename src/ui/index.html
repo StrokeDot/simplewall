@@ -1,0 +1,1622 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>simplewall Personal</title>
+<style>
+:root {
+  --font: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'Cascadia Mono', 'Consolas', monospace;
+  --radius: 10px;
+  --radius-sm: 7px;
+  --radius-pill: 999px;
+  --transition: 140ms ease;
+}
+
+[data-theme="dark"] {
+  --bg: #0c1017;
+  --bg-elev: #131924;
+  --bg-card: #18202e;
+  --bg-hover: #1f293b;
+  --bg-active: #25334a;
+  --bg-input: #0f1520;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #eef2f8;
+  --text-2: #9aa7bd;
+  --text-3: #6c7a93;
+  --accent: #3b82f6;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --green: #22c55e;
+  --green-soft: rgba(34, 197, 94, 0.15);
+  --amber: #f59e0b;
+  --amber-soft: rgba(245, 158, 11, 0.16);
+  --red: #ef4444;
+  --red-soft: rgba(239, 68, 68, 0.16);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+}
+
+[data-theme="light"] {
+  --bg: #f3f6fb;
+  --bg-elev: #ffffff;
+  --bg-card: #ffffff;
+  --bg-hover: #f0f4fa;
+  --bg-active: #e6eefb;
+  --bg-input: #f8fafd;
+  --border: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.16);
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #64748b;
+  --accent: #2563eb;
+  --accent-soft: rgba(37, 99, 235, 0.11);
+  --green: #16a34a;
+  --green-soft: rgba(22, 163, 74, 0.12);
+  --amber: #d97706;
+  --amber-soft: rgba(217, 119, 6, 0.13);
+  --red: #dc2626;
+  --red-soft: rgba(220, 38, 38, 0.12);
+  --shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%; height: 100%;
+  font-family: var(--font);
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 230px;
+  flex-shrink: 0;
+  background: var(--bg-elev);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  gap: 6px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.brand-logo {
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  display: grid; place-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+}
+
+.brand-title { font-weight: 700; font-size: 14.5px; line-height: 1.2; }
+.brand-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-weight: 500;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.nav-item:hover { background: var(--bg-hover); color: var(--text); }
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(59, 130, 246, 0.22);
+  font-weight: 600;
+}
+
+.nav-icon { width: 17px; height: 17px; flex-shrink: 0; opacity: 0.9; }
+.nav-label { flex: 1; }
+.nav-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+.nav-badge.warn { background: var(--amber-soft); color: var(--amber); }
+.nav-badge.danger { background: var(--red-soft); color: var(--red); }
+.nav-badge.ok { background: var(--green-soft); color: var(--green); }
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.segmented {
+  display: inline-flex;
+  background: var(--bg-input);
+  border-radius: 6px;
+  padding: 2px;
+  border: 1px solid var(--border);
+}
+
+.segmented button {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  padding: 4px 9px;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Main workspace */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Top bar */
+.topbar {
+  height: 60px;
+  flex-shrink: 0;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+}
+
+.mode-bar {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  gap: 2px;
+  position: relative;
+}
+
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.mode-btn:hover { color: var(--text); background: var(--bg-hover); }
+.mode-btn.active-strict { background: var(--green-soft); color: var(--green); }
+.mode-btn.active-safe { background: var(--amber-soft); color: var(--amber); }
+.mode-btn.active-off { background: var(--red-soft); color: var(--red); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot-green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.dot-amber { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.dot-red { background: var(--red); }
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 90px;
+  min-width: 240px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: 100;
+  display: none;
+}
+.dropdown-menu.open { display: block; }
+.dropdown-title {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 6px 10px 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.dropdown-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dropdown-item:hover { background: var(--bg-hover); }
+.dropdown-item small { color: var(--text-3); font-size: 11.5px; }
+
+.search-wrap {
+  flex: 1;
+  max-width: 380px;
+  margin-left: auto;
+  position: relative;
+}
+
+.search-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 7px 14px 7px 34px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.search-input:focus { border-color: var(--accent); }
+.search-icon {
+  position: absolute;
+  left: 11px; top: 50%;
+  transform: translateY(-50%);
+  width: 15px; height: 15px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.icon-btn {
+  width: 34px; height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-2);
+  display: grid; place-items: center;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.icon-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--border-strong); }
+
+/* Safe Pause Banner */
+.banner {
+  padding: 10px 20px;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+.banner.show { display: flex; }
+.banner.safe { background: var(--amber-soft); color: var(--amber); }
+.banner.off { background: var(--red-soft); color: var(--red); }
+
+/* Content + Inspector split */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 22px 24px 32px;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* Page headers */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.page-title { font-size: 21px; font-weight: 700; letter-spacing: -0.2px; }
+.page-sub { font-size: 13px; color: var(--text-2); margin-top: 3px; }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--bg-hover); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+.btn-green { background: var(--green-soft); border-color: rgba(34,197,94,0.3); color: var(--green); }
+.btn-green:hover:not(:disabled) { background: var(--green); color: #fff; }
+.btn-amber { background: var(--amber-soft); border-color: rgba(245,158,11,0.35); color: var(--amber); }
+.btn-amber:hover:not(:disabled) { background: var(--amber); color: #111; }
+.btn-red { background: var(--red-soft); border-color: rgba(239,68,68,0.3); color: var(--red); }
+.btn-red:hover:not(:disabled) { background: var(--red); color: #fff; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+/* Cards & Grids */
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 980px) {
+  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-3 { grid-template-columns: 1fr; }
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.stat-card {
+  cursor: pointer;
+  transition: transform var(--transition), border-color var(--transition), background var(--transition);
+}
+.stat-card:hover { transform: translateY(-1px); border-color: var(--border-strong); background: var(--bg-hover); }
+.stat-label { font-size: 12px; color: var(--text-2); font-weight: 500; }
+.stat-val { font-size: 28px; font-weight: 700; margin-top: 6px; letter-spacing: -0.5px; }
+.stat-hint { font-size: 11.5px; color: var(--text-3); margin-top: 4px; }
+
+.mode-card {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1.5px solid var(--border);
+  transition: all var(--transition);
+}
+.mode-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.mode-card.selected-strict { border-color: var(--green); background: var(--green-soft); }
+.mode-card.selected-safe { border-color: var(--amber); background: var(--amber-soft); }
+.mode-card.selected-off { border-color: var(--red); background: var(--red-soft); }
+.mode-card-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.mode-card-desc { font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
+
+/* Filter chips */
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+.chip {
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.chip:hover { color: var(--text); border-color: var(--border-strong); }
+.chip.active { background: var(--accent-soft); color: var(--accent); border-color: rgba(59,130,246,0.35); }
+
+/* App List */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.app-row:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.app-row.selected { background: var(--bg-active); border-color: var(--accent); }
+
+.app-icon {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.app-icon img { width: 24px; height: 24px; object-fit: contain; }
+
+.app-main { flex: 1; min-width: 0; }
+.app-name-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.app-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.app-sub {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.pill-green { background: var(--green-soft); color: var(--green); }
+.pill-red { background: var(--red-soft); color: var(--red); }
+.pill-amber { background: var(--amber-soft); color: var(--amber); }
+.pill-blue { background: var(--accent-soft); color: var(--accent); }
+.pill-muted { background: var(--bg-hover); color: var(--text-3); }
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Inspector Drawer */
+.inspector {
+  width: 350px;
+  flex-shrink: 0;
+  background: var(--bg-elev);
+  border-left: 1px solid var(--border);
+  display: none;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 18px;
+  gap: 14px;
+}
+.inspector.open { display: flex; }
+
+.inspector-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.inspector-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.inspector-hero .app-icon { width: 46px; height: 46px; border-radius: 11px; }
+.inspector-hero .app-icon img { width: 32px; height: 32px; }
+.inspector-name { font-size: 16px; font-weight: 700; word-break: break-word; }
+.inspector-file { font-size: 12px; color: var(--text-3); font-family: var(--mono); margin-top: 2px; }
+
+.info-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.info-box-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: var(--text-3);
+}
+.info-field { display: flex; flex-direction: column; gap: 2px; }
+.info-label { font-size: 11.5px; color: var(--text-3); }
+.info-value { font-size: 13px; color: var(--text); word-break: break-word; user-select: text; }
+.info-value.mono { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); }
+
+.inspector-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.action-row { display: flex; gap: 8px; }
+.action-row .btn { flex: 1; }
+
+/* Settings */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-title { font-weight: 600; font-size: 13.5px; }
+.setting-desc { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+
+.switch {
+  position: relative;
+  width: 42px; height: 24px;
+  flex-shrink: 0;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute; inset: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.slider:before {
+  content: "";
+  position: absolute;
+  height: 16px; width: 16px;
+  left: 3px; top: 3px;
+  background: var(--text-2);
+  border-radius: 50%;
+  transition: all var(--transition);
+}
+.switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + .slider:before { transform: translateX(18px); background: #fff; }
+
+/* Checkbox for cleanup */
+.chk {
+  width: 17px; height: 17px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Empty state */
+.empty {
+  text-align: center;
+  padding: 46px 20px;
+  color: var(--text-2);
+  background: var(--bg-card);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+.empty-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 5px; }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 20px; right: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 11px 16px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 300;
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  transition: all 180ms ease;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+
+/* Release notes box */
+.release-notes {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+  user-select: text;
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">SW</div>
+      <div>
+        <div class="brand-title">SimpleWall</div>
+        <div class="brand-sub" id="sidebarVersion">Personal Edition</div>
+      </div>
+    </div>
+
+    <button class="nav-item active" data-page="overview">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span class="nav-label">Overview</span>
+    </button>
+    <button class="nav-item" data-page="allowed">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+      <span class="nav-label">Allowed Apps</span>
+      <span class="nav-badge ok" id="navAllowed">0</span>
+    </button>
+    <button class="nav-item" data-page="blocked">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+      <span class="nav-label">Blocked Apps</span>
+      <span class="nav-badge danger" id="navBlocked">0</span>
+    </button>
+    <button class="nav-item" data-page="cleanup">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+      <span class="nav-label">Missing Cleanup</span>
+      <span class="nav-badge warn" id="navMissing">0</span>
+    </button>
+    <button class="nav-item" data-page="activity">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <span class="nav-label">Live Activity</span>
+      <span class="nav-badge" id="navActivity">0</span>
+    </button>
+    <button class="nav-item" data-page="settings">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span class="nav-label">Settings & Updates</span>
+    </button>
+
+    <div class="sidebar-footer">
+      <div class="theme-row">
+        <span>Theme</span>
+        <div class="segmented">
+          <button id="themeDarkBtn" class="active" onclick="setTheme('dark')">Dark</button>
+          <button id="themeLightBtn" onclick="setTheme('light')">Light</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Column -->
+  <div class="main">
+    <header class="topbar">
+      <div class="mode-bar" id="modeBar">
+        <button class="mode-btn" id="btnModeStrict" onclick="setMode('strict', 0)">
+          <span class="dot dot-green"></span> Strict
+        </button>
+        <button class="mode-btn" id="btnModeSafe" onclick="toggleSafeMenu(event)">
+          <span class="dot dot-amber"></span> <span id="safeLabel">Safe Pause ▾</span>
+        </button>
+        <button class="mode-btn" id="btnModeOff" onclick="confirmOff()">
+          <span class="dot dot-red"></span> Off
+        </button>
+
+        <div class="dropdown-menu" id="safeMenu">
+          <div class="dropdown-title">Pause new blocks (keep blocked apps blocked)</div>
+          <button class="dropdown-item" onclick="setMode('safe_pause', 900)"><span>15 minutes</span><small>Auto-resume</small></button>
+          <button class="dropdown-item" onclick="setMode('safe_pause', 1800)"><span>30 minutes</span><small>Auto-resume</small></button>
+          <button class="dropdown-item" onclick="setMode('safe_pause', 3600)"><span>1 hour</span><small>Auto-resume</small></button>
+          <button class="dropdown-item" onclick="setMode('safe_pause', 0)"><span>Until I resume</span><small>Manual</small></button>
+        </div>
+      </div>
+
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-input" id="searchInput" type="text" placeholder="Search apps, publishers, or folders..." oninput="onSearch(this.value)">
+      </div>
+
+      <button class="icon-btn" title="Refresh list & running status" onclick="refreshAll()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      </button>
+    </header>
+
+    <div class="banner" id="modeBanner">
+      <span id="bannerText"></span>
+      <button class="btn btn-sm btn-green" onclick="setMode('strict', 0)">Resume Strict Protection</button>
+    </div>
+
+    <div class="workspace">
+      <main class="content" id="pageContent"></main>
+      <aside class="inspector" id="inspector"></aside>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const state = {
+  page: 'overview',
+  mode: 'off',
+  safePauseRemaining: 0,
+  isApplying: false,
+  theme: 'dark',
+  appVersion: '4.0.0',
+  forkRepo: 'StrokeDot/simplewall',
+  settings: {},
+  apps: [],
+  activity: [],
+  search: '',
+  filterAllowed: 'all',
+  filterBlocked: 'all',
+  includeSystem: false,
+  selectedAppId: null,
+  cleanupSelected: new Set(),
+  cleanupFilter: 'all',
+  updateInfo: null,
+  updateStatus: 'idle',
+  updateMessage: ''
+};
+
+function send(action, payload = {}) {
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.postMessage(JSON.stringify({ action, ...payload }));
+  }
+}
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function formatDuration(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+}
+
+function formatDate(ts) {
+  if (!ts) return 'Unknown';
+  try {
+    return new Date(ts * 1000).toLocaleString();
+  } catch { return 'Unknown'; }
+}
+
+function getVisibleApps(kind) {
+  const q = state.search.trim().toLowerCase();
+  return state.apps.filter(a => {
+    if (kind === 'allowed' && a.status !== 'allowed') return false;
+    if (kind === 'blocked') {
+      if (a.status !== 'blocked') return false;
+      if (!state.includeSystem && (a.category === 'service' || a.category === 'uwp') && !a.isSilent) return false;
+    }
+    if (kind === 'missing') {
+      if (a.exists) return false;
+      if (a.isSystem) return false;
+      if (state.cleanupFilter === 'blocked' && a.status !== 'blocked') return false;
+      if (state.cleanupFilter === 'allowed' && a.status !== 'allowed') return false;
+    }
+    if (kind === 'allowed') {
+      if (state.filterAllowed === 'running' && !a.isRunning) return false;
+      if (state.filterAllowed === 'missing' && a.exists) return false;
+      if (state.filterAllowed === 'timed' && !(a.timerRemaining > 0)) return false;
+    }
+    if (kind === 'blocked') {
+      if (state.filterBlocked === 'installed' && !a.exists) return false;
+      if (state.filterBlocked === 'running' && !a.isRunning) return false;
+      if (state.filterBlocked === 'missing' && a.exists) return false;
+    }
+    if (q) {
+      const hay = `${a.name} ${a.fileName} ${a.company} ${a.description} ${a.parentApp} ${a.path}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function applyThemeUI(theme) {
+  state.theme = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', state.theme);
+  document.getElementById('themeDarkBtn').classList.toggle('active', state.theme === 'dark');
+  document.getElementById('themeLightBtn').classList.toggle('active', state.theme === 'light');
+}
+
+function setTheme(theme) {
+  applyThemeUI(theme);
+  send('setTheme', { theme });
+}
+
+function setMode(mode, durationSeconds = 0) {
+  document.getElementById('safeMenu').classList.remove('open');
+  if (state.isApplying) return;
+  state.isApplying = true;
+  renderChrome();
+  send('setMode', { mode, durationSeconds });
+}
+
+function confirmOff() {
+  document.getElementById('safeMenu').classList.remove('open');
+  if (state.mode === 'off') return;
+  if (confirm('Turn the firewall completely OFF?\n\nThis will also unblock all previously blocked apps. If you want blocked apps to stay blocked, use Safe Pause instead.')) {
+    setMode('off', 0);
+  }
+}
+
+function toggleSafeMenu(e) {
+  e.stopPropagation();
+  document.getElementById('safeMenu').classList.toggle('open');
+}
+
+document.addEventListener('click', () => {
+  document.getElementById('safeMenu').classList.remove('open');
+});
+
+function setPage(page) {
+  state.page = page;
+  document.querySelectorAll('.nav-item').forEach(b => {
+    b.classList.toggle('active', b.dataset.page === page);
+  });
+  renderPage();
+}
+
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => setPage(btn.dataset.page));
+});
+
+function onSearch(val) {
+  state.search = val;
+  if (state.page === 'overview' && val.trim()) {
+    setPage('blocked');
+    return;
+  }
+  renderPage();
+}
+
+function refreshAll() {
+  send('refresh');
+  showToast('Refreshed app status');
+}
+
+function selectApp(id) {
+  state.selectedAppId = id;
+  renderPage();
+  renderInspector();
+}
+
+function closeInspector() {
+  state.selectedAppId = null;
+  renderPage();
+  renderInspector();
+}
+
+function allowApp(id, durationSeconds = 0, e) {
+  if (e) e.stopPropagation();
+  send('allowApp', { id, durationSeconds });
+  showToast(durationSeconds ? `Allowed for ${formatDuration(durationSeconds)}` : 'App allowed');
+}
+
+function blockApp(id, e) {
+  if (e) e.stopPropagation();
+  send('blockApp', { id });
+  showToast('App blocked');
+}
+
+function deleteApps(ids) {
+  if (!ids || !ids.length) return;
+  const label = ids.length === 1 ? 'this entry' : `${ids.length} missing entries`;
+  if (!confirm(`Remove ${label} from your firewall list?`)) return;
+  ids.forEach(id => state.cleanupSelected.delete(id));
+  if (ids.includes(state.selectedAppId)) state.selectedAppId = null;
+  send('deleteApps', { ids });
+  showToast(`Removed ${ids.length} ${ids.length === 1 ? 'entry' : 'entries'}`);
+}
+
+function renderChrome() {
+  document.getElementById('sidebarVersion').textContent = `Personal v${state.appVersion}`;
+  const allowedCount = state.apps.filter(a => a.status === 'allowed').length;
+  const blockedCount = state.apps.filter(a => a.status === 'blocked' && (state.includeSystem || a.isSilent || (a.category !== 'service' && a.category !== 'uwp'))).length;
+  const missingCount = state.apps.filter(a => !a.exists && !a.isSystem).length;
+
+  document.getElementById('navAllowed').textContent = allowedCount;
+  document.getElementById('navBlocked').textContent = blockedCount;
+  document.getElementById('navMissing').textContent = missingCount;
+  document.getElementById('navActivity').textContent = state.activity.length;
+
+  const bStrict = document.getElementById('btnModeStrict');
+  const bSafe = document.getElementById('btnModeSafe');
+  const bOff = document.getElementById('btnModeOff');
+  bStrict.className = 'mode-btn' + (state.mode === 'strict' ? ' active-strict' : '');
+  bSafe.className = 'mode-btn' + (state.mode === 'safe_pause' ? ' active-safe' : '');
+  bOff.className = 'mode-btn' + (state.mode === 'off' ? ' active-off' : '');
+
+  const safeLabel = document.getElementById('safeLabel');
+  if (state.mode === 'safe_pause' && state.safePauseRemaining > 0) {
+    safeLabel.textContent = `Safe Pause (${formatDuration(state.safePauseRemaining)}) ▾`;
+  } else {
+    safeLabel.textContent = 'Safe Pause ▾';
+  }
+
+  const banner = document.getElementById('modeBanner');
+  const bannerText = document.getElementById('bannerText');
+  if (state.isApplying) {
+    banner.className = 'banner show safe';
+    bannerText.textContent = 'Applying Windows firewall rules safely...';
+  } else if (state.mode === 'safe_pause') {
+    banner.className = 'banner show safe';
+    const rem = state.safePauseRemaining > 0 ? ` — resumes Strict Protection in ${formatDuration(state.safePauseRemaining)}` : ' — until you resume';
+    bannerText.textContent = `Safe Pause is ON: new apps can connect, while all ${blockedCount} blocked apps stay strictly blocked${rem}.`;
+  } else if (state.mode === 'off') {
+    banner.className = 'banner show off';
+    bannerText.textContent = 'Firewall is completely OFF. All apps (including blocked ones) can connect.';
+  } else {
+    banner.className = 'banner';
+  }
+}
+
+function appIconHtml(a) {
+  if (a.iconDataUrl) return `<div class="app-icon"><img src="${a.iconDataUrl}" alt=""></div>`;
+  const ch = (a.name || a.fileName || '?').trim().charAt(0).toUpperCase() || '?';
+  return `<div class="app-icon">${esc(ch)}</div>`;
+}
+
+function renderAppRow(a, mode) {
+  const isSel = state.selectedAppId === a.id;
+  const subParts = [];
+  if (a.company) subParts.push(a.company);
+  else if (a.parentApp) subParts.push(a.parentApp);
+  if (a.description && a.description !== a.name) subParts.push(a.description);
+  if (!subParts.length) subParts.push(a.path || a.fileName);
+
+  const badges = [];
+  if (a.isRunning) badges.push(`<span class="pill pill-green"><span class="dot dot-green" style="width:6px;height:6px;box-shadow:none"></span>Running</span>`);
+  if (!a.exists) badges.push(`<span class="pill pill-amber">Missing from PC</span>`);
+  if (a.timerRemaining > 0) badges.push(`<span class="pill pill-blue">${formatDuration(a.timerRemaining)} left</span>`);
+  if (a.exists && a.signature) badges.push(`<span class="pill pill-muted">Signed</span>`);
+
+  const chkHtml = mode === 'cleanup'
+    ? `<input class="chk" type="checkbox" ${state.cleanupSelected.has(a.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleCleanup('${a.id}', this.checked)">`
+    : '';
+
+  let actionHtml = '';
+  if (mode === 'allowed') {
+    actionHtml = `<button class="btn btn-sm btn-red" onclick="blockApp('${a.id}', event)">Block</button>`;
+  } else if (mode === 'blocked') {
+    actionHtml = `<button class="btn btn-sm btn-green" onclick="allowApp('${a.id}', 0, event)">Allow</button>`;
+    if (!a.exists && !a.isSystem) {
+      actionHtml += `<button class="btn btn-sm" onclick="event.stopPropagation(); deleteApps(['${a.id}'])">Remove</button>`;
+    }
+  } else if (mode === 'cleanup') {
+    actionHtml = `<span class="pill ${a.status === 'allowed' ? 'pill-green' : 'pill-red'}">${a.status === 'allowed' ? 'Allowed' : 'Blocked'}</span>
+      <button class="btn btn-sm btn-red" onclick="event.stopPropagation(); deleteApps(['${a.id}'])">Remove</button>`;
+  }
+
+  return `<div class="app-row ${isSel ? 'selected' : ''}" onclick="selectApp('${a.id}')">
+    ${chkHtml}
+    ${appIconHtml(a)}
+    <div class="app-main">
+      <div class="app-name-line">
+        <span class="app-name">${esc(a.name || a.fileName)}</span>
+        ${badges.join('')}
+      </div>
+      <div class="app-sub">${esc(subParts.join(' · '))}</div>
+    </div>
+    <div class="row-actions">${actionHtml}</div>
+  </div>`;
+}
+
+function toggleCleanup(id, checked) {
+  if (checked) state.cleanupSelected.add(id);
+  else state.cleanupSelected.delete(id);
+  renderPage();
+}
+
+function renderOverview() {
+  const allowed = state.apps.filter(a => a.status === 'allowed');
+  const blocked = state.apps.filter(a => a.status === 'blocked' && (a.isSilent || (a.category !== 'service' && a.category !== 'uwp')));
+  const runningBlocked = blocked.filter(a => a.isRunning);
+  const missing = state.apps.filter(a => !a.exists && !a.isSystem);
+  const recent = state.activity.slice(0, 6);
+
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Firewall Overview</div>
+        <div class="page-sub">Choose your protection mode and keep an eye on allowed and blocked apps.</div>
+      </div>
+      <button class="btn btn-primary" onclick="send('addApp')">+ Add App</button>
+    </div>
+
+    <div class="grid-3">
+      <div class="card mode-card ${state.mode === 'strict' ? 'selected-strict' : ''}" onclick="setMode('strict', 0)">
+        <div class="mode-card-title"><span class="dot dot-green"></span> Strict Protection</div>
+        <div class="mode-card-desc">Normal security. Only apps on your Allowed list can access the internet; everything else is blocked.</div>
+      </div>
+      <div class="card mode-card ${state.mode === 'safe_pause' ? 'selected-safe' : ''}" onclick="setMode('safe_pause', 1800)">
+        <div class="mode-card-title"><span class="dot dot-amber"></span> Safe Pause (30 min)</div>
+        <div class="mode-card-desc">Lets new apps connect temporarily so you can get work done, while <strong>every blocked app stays strictly blocked</strong>.</div>
+      </div>
+      <div class="card mode-card ${state.mode === 'off' ? 'selected-off' : ''}" onclick="confirmOff()">
+        <div class="mode-card-title"><span class="dot dot-red"></span> Firewall Off</div>
+        <div class="mode-card-desc">Completely disables filtering. Only use if you truly need everything open.</div>
+      </div>
+    </div>
+
+    <div class="grid-4">
+      <div class="card stat-card" onclick="setPage('allowed')">
+        <div class="stat-label">Allowed Apps</div>
+        <div class="stat-val" style="color:var(--green)">${allowed.length}</div>
+        <div class="stat-hint">${allowed.filter(a=>a.isRunning).length} running right now</div>
+      </div>
+      <div class="card stat-card" onclick="setPage('blocked')">
+        <div class="stat-label">Blocked Apps</div>
+        <div class="stat-val" style="color:var(--red)">${blocked.length}</div>
+        <div class="stat-hint">${blocked.filter(a=>a.exists).length} still installed on PC</div>
+      </div>
+      <div class="card stat-card" onclick="state.filterBlocked='running'; setPage('blocked')">
+        <div class="stat-label">Blocked & Running</div>
+        <div class="stat-val" style="color:var(--amber)">${runningBlocked.length}</div>
+        <div class="stat-hint">Blocked apps active in background</div>
+      </div>
+      <div class="card stat-card" onclick="setPage('cleanup')">
+        <div class="stat-label">Missing from PC</div>
+        <div class="stat-val" style="color:var(--accent)">${missing.length}</div>
+        <div class="stat-hint">Old uninstalled apps to clean up</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="toolbar-row" style="margin-bottom:10px">
+        <div>
+          <div style="font-weight:700;font-size:15px">Recent Connection Activity</div>
+          <div style="font-size:12px;color:var(--text-2)">Latest blocked or allowed attempts caught by the firewall</div>
+        </div>
+        <button class="btn btn-sm" onclick="setPage('activity')">View All</button>
+      </div>
+      ${recent.length ? `<div class="list">${recent.map(ev => renderActivityRow(ev)).join('')}</div>`
+        : `<div class="empty" style="padding:26px"><div class="empty-title">No recent events yet</div>Connection attempts will appear here live as apps try to reach the internet.</div>`}
+    </div>
+  `;
+}
+
+function renderAllowed() {
+  const list = getVisibleApps('allowed');
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Allowed Apps</div>
+        <div class="page-sub">Programs permitted to access the internet. Click any app to see who made it and where it lives.</div>
+      </div>
+      <button class="btn btn-primary" onclick="send('addApp')">+ Add App</button>
+    </div>
+    <div class="toolbar-row">
+      <div class="chips">
+        <button class="chip ${state.filterAllowed==='all'?'active':''}" onclick="state.filterAllowed='all';renderPage()">All Allowed</button>
+        <button class="chip ${state.filterAllowed==='running'?'active':''}" onclick="state.filterAllowed='running';renderPage()">Running Now</button>
+        <button class="chip ${state.filterAllowed==='timed'?'active':''}" onclick="state.filterAllowed='timed';renderPage()">Temporary Timer</button>
+        <button class="chip ${state.filterAllowed==='missing'?'active':''}" onclick="state.filterAllowed='missing';renderPage()">Missing from PC</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-3)">Showing ${list.length} apps</div>
+    </div>
+    ${list.length ? `<div class="list">${list.map(a => renderAppRow(a, 'allowed')).join('')}</div>`
+      : `<div class="empty"><div class="empty-title">No matching allowed apps</div>Try clearing your search or filter.</div>`}
+  `;
+}
+
+function renderBlocked() {
+  const list = getVisibleApps('blocked');
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Blocked Apps</div>
+        <div class="page-sub">Programs blocked from the internet — even while Safe Pause is active. Click any app to inspect what it is.</div>
+      </div>
+      <button class="btn" onclick="setPage('cleanup')">Clean Up Missing</button>
+    </div>
+    <div class="toolbar-row">
+      <div class="chips">
+        <button class="chip ${state.filterBlocked==='all'?'active':''}" onclick="state.filterBlocked='all';renderPage()">All Blocked</button>
+        <button class="chip ${state.filterBlocked==='installed'?'active':''}" onclick="state.filterBlocked='installed';renderPage()">Still on PC</button>
+        <button class="chip ${state.filterBlocked==='running'?'active':''}" onclick="state.filterBlocked='running';renderPage()">Running Now</button>
+        <button class="chip ${state.filterBlocked==='missing'?'active':''}" onclick="state.filterBlocked='missing';renderPage()">Missing / Uninstalled</button>
+        <button class="chip ${state.includeSystem?'active':''}" onclick="state.includeSystem=!state.includeSystem;renderChrome();renderPage()">Include Windows Services & Store</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-3)">Showing ${list.length} apps</div>
+    </div>
+    ${list.length ? `<div class="list">${list.map(a => renderAppRow(a, 'blocked')).join('')}</div>`
+      : `<div class="empty"><div class="empty-title">No matching blocked apps</div>Try changing your filter or search query.</div>`}
+  `;
+}
+
+function renderCleanup() {
+  const list = getVisibleApps('missing');
+  const selectedIds = list.filter(a => state.cleanupSelected.has(a.id)).map(a => a.id);
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Missing Apps Cleanup</div>
+        <div class="page-sub">Apps saved in your firewall list whose program file is no longer installed on your computer.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="selectAllCleanup(true)" ${list.length?'':'disabled'}>Select All (${list.length})</button>
+        <button class="btn btn-red" onclick="deleteApps(${JSON.stringify(selectedIds).replace(/"/g, '&quot;')})" ${selectedIds.length?'':'disabled'}>Remove Selected (${selectedIds.length})</button>
+      </div>
+    </div>
+    <div class="toolbar-row">
+      <div class="chips">
+        <button class="chip ${state.cleanupFilter==='all'?'active':''}" onclick="state.cleanupFilter='all';renderPage()">All Missing</button>
+        <button class="chip ${state.cleanupFilter==='blocked'?'active':''}" onclick="state.cleanupFilter='blocked';renderPage()">Missing Blocked Apps</button>
+        <button class="chip ${state.cleanupFilter==='allowed'?'active':''}" onclick="state.cleanupFilter='allowed';renderPage()">Missing Allowed Apps</button>
+      </div>
+      ${selectedIds.length ? `<button class="btn btn-sm" onclick="selectAllCleanup(false)">Clear Selection</button>` : ''}
+    </div>
+    ${list.length ? `<div class="list">${list.map(a => renderAppRow(a, 'cleanup')).join('')}</div>`
+      : `<div class="empty"><div class="empty-title">Your list is spotless!</div>Every blocked and allowed app in your firewall is still installed on this PC.</div>`}
+  `;
+}
+
+function selectAllCleanup(select) {
+  const list = getVisibleApps('missing');
+  if (select) list.forEach(a => state.cleanupSelected.add(a.id));
+  else state.cleanupSelected.clear();
+  renderPage();
+}
+
+function renderActivityRow(ev) {
+  const app = state.apps.find(a => a.id === ev.appId);
+  const name = ev.appName || (app && app.name) || ev.path || 'Unknown';
+  const badge = ev.isAllow
+    ? `<span class="pill pill-green">Allowed</span>`
+    : `<span class="pill pill-red">Blocked</span>`;
+  const dest = ev.remoteAddr ? `${ev.remoteAddr}${ev.remotePort ? ':' + ev.remotePort : ''}` : 'Local / Unknown';
+
+  return `<div class="app-row" onclick="${ev.appId ? `selectApp('${ev.appId}')` : ''}">
+    <div class="app-main">
+      <div class="app-name-line">
+        ${badge}
+        <span class="app-name">${esc(name)}</span>
+        <span class="pill pill-muted">${esc(ev.protocol || 'NET')} · ${esc(ev.direction || 'Out')}</span>
+      </div>
+      <div class="app-sub">${esc(dest)} · ${esc(formatDate(ev.timestamp))}</div>
+    </div>
+    <div class="row-actions">
+      ${ev.appId && !ev.isAllow ? `<button class="btn btn-sm btn-green" onclick="allowApp('${ev.appId}', 0, event)">Allow</button>` : ''}
+      ${ev.appId && ev.isAllow ? `<button class="btn btn-sm btn-red" onclick="blockApp('${ev.appId}', event)">Block</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderActivity() {
+  const q = state.search.trim().toLowerCase();
+  const list = state.activity.filter(ev => {
+    if (!q) return true;
+    return `${ev.appName} ${ev.path} ${ev.remoteAddr} ${ev.protocol}`.toLowerCase().includes(q);
+  });
+
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Live Activity</div>
+        <div class="page-sub">Real-time feed of network attempts handled by your firewall. Click any row to inspect the app.</div>
+      </div>
+      <button class="btn" onclick="send('clearActivity')">Clear Feed</button>
+    </div>
+    ${list.length ? `<div class="list">${list.map(ev => renderActivityRow(ev)).join('')}</div>`
+      : `<div class="empty"><div class="empty-title">Waiting for activity</div>Blocked and logged connection attempts will show up here automatically.</div>`}
+  `;
+}
+
+function toggleSetting(key, val) {
+  state.settings[key] = val;
+  send('updateSetting', { key, value: val });
+  showToast('Setting updated');
+}
+
+function renderSettings() {
+  const s = state.settings;
+  let updateBody = `<div style="font-size:13px;color:var(--text-2)">Checks your personal GitHub fork (<strong>${esc(state.forkRepo)}</strong>) for new releases.</div>`;
+
+  if (state.updateStatus === 'checking') {
+    updateBody = `<div style="font-size:13px;color:var(--accent)">Checking ${esc(state.forkRepo)} for updates...</div>`;
+  } else if (state.updateStatus === 'downloading') {
+    updateBody = `<div style="font-size:13px;color:var(--amber)">Downloading and preparing update... SimpleWall will restart automatically.</div>`;
+  } else if (state.updateStatus === 'error') {
+    updateBody = `<div style="font-size:13px;color:var(--red)">${esc(state.updateMessage || 'Could not reach GitHub releases.')}</div>`;
+  } else if (state.updateInfo) {
+    const u = state.updateInfo;
+    if (u.hasUpdate) {
+      updateBody = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-weight:700;color:var(--green)">Update available: ${esc(u.latestVersion)}</div>
+            <div style="font-size:12px;color:var(--text-2)">Current version: v${esc(state.appVersion)}</div>
+          </div>
+          ${u.downloadUrl
+            ? `<button class="btn btn-primary" onclick="installUpdate()">Download & Install Update</button>`
+            : `<button class="btn btn-primary" onclick="send('openUrl', { url: '${esc(u.htmlUrl)}' })">Open Release Page</button>`}
+        </div>
+        ${u.releaseNotes ? `<div class="release-notes">${esc(u.releaseNotes)}</div>` : ''}
+      `;
+    } else {
+      updateBody = `<div style="font-size:13px;color:var(--green)">You're up to date! (v${esc(state.appVersion)} — latest on ${esc(state.forkRepo)} is ${esc(u.latestVersion || ('v'+state.appVersion))})</div>`;
+    }
+  }
+
+  return `
+    <div class="page-header">
+      <div>
+        <div class="page-title">Settings & Updates</div>
+        <div class="page-sub">Customize appearance, alerts, core protection, and one-click updates from your GitHub fork.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+        <div>
+          <div style="font-weight:700;font-size:15px">Personal Fork Updater</div>
+          <div style="font-size:12px;color:var(--text-2)">Installed version: v${esc(state.appVersion)} · Repo: ${esc(state.forkRepo)}</div>
+        </div>
+        <button class="btn" onclick="checkForUpdates()" ${state.updateStatus==='checking'||state.updateStatus==='downloading'?'disabled':''}>Check for Updates</button>
+      </div>
+      ${updateBody}
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px">Appearance & Alerts</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Color Theme</div>
+          <div class="setting-desc">Switch instantly between Dark Mode and Light Mode.</div>
+        </div>
+        <div class="segmented">
+          <button class="${state.theme==='dark'?'active':''}" onclick="setTheme('dark')">Dark</button>
+          <button class="${state.theme==='light'?'active':''}" onclick="setTheme('light')">Light</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Pop-up Alerts for Blocked Apps</div>
+          <div class="setting-desc">Show a notification pop-up when an unknown app tries to connect in Strict mode.</div>
+        </div>
+        <label class="switch"><input type="checkbox" ${s.notifications?'checked':''} onchange="toggleSetting('IsNotificationsEnabled', this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Notification Sound</div>
+          <div class="setting-desc">Play a sound when a pop-up alert appears.</div>
+        </div>
+        <label class="switch"><input type="checkbox" ${s.sound?'checked':''} onchange="toggleSetting('IsNotificationsSound', this.checked)"><span class="slider"></span></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px">Firewall Rules</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Block Inbound Connections</div>
+          <div class="setting-desc">Reject unsolicited incoming connections from the network (stays active even in Safe Pause).</div>
+        </div>
+        <label class="switch"><input type="checkbox" ${s.blockInbound?'checked':''} onchange="toggleSetting('BlockInboundConnections', this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Stealth Mode</div>
+          <div class="setting-desc">Silently drop port-scanning probes so your PC stays invisible on networks.</div>
+        </div>
+        <label class="switch"><input type="checkbox" ${s.stealthMode?'checked':''} onchange="toggleSetting('UseStealthMode', this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Allow Local Loopback</div>
+          <div class="setting-desc">Allow programs on this PC to talk locally to each other (127.0.0.1 / localhost).</div>
+        </div>
+        <label class="switch"><input type="checkbox" ${s.allowLoopback?'checked':''} onchange="toggleSetting('AllowLoopbackConnections', this.checked)"><span class="slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Allow IPv6</div>
+          <div class="setting-desc">Permit IPv6 networking traffic alongside IPv4.</div>
+        </div>
+        <label class="switch"><input type="checkbox" ${s.allowIpv6?'checked':''} onchange="toggleSetting('AllowIPv6', this.checked)"><span class="slider"></span></label>
+      </div>
+    </div>
+  `;
+}
+
+function checkForUpdates() {
+  state.updateStatus = 'checking';
+  state.updateMessage = '';
+  renderPage();
+  send('checkUpdate');
+}
+
+function installUpdate() {
+  if (!state.updateInfo || !state.updateInfo.downloadUrl) return;
+  if (!confirm(`Download and install ${state.updateInfo.latestVersion}?\n\nSimpleWall will back up the current version, install the update, and restart automatically.`)) return;
+  state.updateStatus = 'downloading';
+  renderPage();
+  send('installUpdate', {
+    downloadUrl: state.updateInfo.downloadUrl,
+    assetName: state.updateInfo.assetName || 'simplewall.exe'
+  });
+}
+
+function renderInspector() {
+  const panel = document.getElementById('inspector');
+  const a = state.apps.find(x => x.id === state.selectedAppId);
+  if (!a) {
+    panel.classList.remove('open');
+    panel.innerHTML = '';
+    return;
+  }
+
+  panel.classList.add('open');
+
+  const statusPill = a.status === 'allowed'
+    ? `<span class="pill pill-green">Allowed Internet</span>`
+    : `<span class="pill pill-red">Blocked</span>`;
+  const existPill = a.exists
+    ? `<span class="pill pill-blue">Installed on PC</span>`
+    : `<span class="pill pill-amber">Missing / Uninstalled</span>`;
+  const runPill = a.isRunning
+    ? `<span class="pill pill-green">Running Now</span>`
+    : `<span class="pill pill-muted">Not Running</span>`;
+
+  const sigHtml = a.signature
+    ? `<span style="color:var(--green);font-weight:600">Verified: ${esc(a.signature)}</span>`
+    : (a.exists ? `<span style="color:var(--amber)">Not digitally signed (or signature unavailable)</span>` : `<span style="color:var(--text-3)">File no longer on PC</span>`);
+
+  const whatIsIt = a.description || a.productName || (a.exists ? 'No description embedded in this program file.' : 'This file was removed or uninstalled from your computer.');
+  const madeBy = a.company || a.signature || 'Unknown publisher';
+  const origin = a.parentApp || 'Unknown folder';
+
+  panel.innerHTML = `
+    <div class="inspector-top">
+      <div class="inspector-hero">
+        ${appIconHtml(a)}
+        <div>
+          <div class="inspector-name">${esc(a.name || a.fileName)}</div>
+          <div class="inspector-file">${esc(a.fileName || '')}</div>
+        </div>
+      </div>
+      <button class="icon-btn" title="Close" onclick="closeInspector()">✕</button>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${statusPill}
+      ${existPill}
+      ${runPill}
+      ${a.timerRemaining > 0 ? `<span class="pill pill-blue">${formatDuration(a.timerRemaining)} left</span>` : ''}
+    </div>
+
+    <div class="info-box">
+      <div class="info-box-title">Who is this & what does it do?</div>
+      <div class="info-field">
+        <div class="info-label">Made by (Publisher)</div>
+        <div class="info-value">${esc(madeBy)}</div>
+      </div>
+      <div class="info-field">
+        <div class="info-label">Digital Signature</div>
+        <div class="info-value">${sigHtml}</div>
+      </div>
+      <div class="info-field">
+        <div class="info-label">What it does</div>
+        <div class="info-value">${esc(whatIsIt)}</div>
+      </div>
+      <div class="info-field">
+        <div class="info-label">Where it came from (App / Folder)</div>
+        <div class="info-value">${esc(origin)}</div>
+      </div>
+      ${a.fileVersion ? `<div class="info-field"><div class="info-label">Version</div><div class="info-value">${esc(a.fileVersion)}</div></div>` : ''}
+      <div class="info-field">
+        <div class="info-label">Added to firewall</div>
+        <div class="info-value">${esc(formatDate(a.timestamp))}</div>
+      </div>
+      <div class="info-field">
+        <div class="info-label">File Location</div>
+        <div class="info-value mono">${esc(a.path || 'N/A')}</div>
+      </div>
+    </div>
+
+    <div class="inspector-actions">
+      ${a.status === 'allowed'
+        ? `<button class="btn btn-red" onclick="blockApp('${a.id}')">Block Internet Access</button>`
+        : `<button class="btn btn-green" onclick="allowApp('${a.id}', 0)">Allow Internet Access</button>
+           <div class="action-row">
+             <button class="btn btn-sm" onclick="allowApp('${a.id}', 600)">Allow 10m</button>
+             <button class="btn btn-sm" onclick="allowApp('${a.id}', 1800)">Allow 30m</button>
+             <button class="btn btn-sm" onclick="allowApp('${a.id}', 3600)">Allow 1h</button>
+           </div>`
+      }
+      <div class="action-row">
+        <button class="btn btn-sm" onclick="send('openFolder', { path: '${esc(a.path).replace(/\\/g, '\\\\')}' })" ${a.exists ? '' : 'disabled'}>Open Folder</button>
+        <button class="btn btn-sm" onclick="send('searchOnline', { query: '${esc((a.fileName || a.name) + (a.company ? ' ' + a.company : '') + ' what is this program')}' })">Look Up Online</button>
+      </div>
+      ${!a.isSystem ? `<button class="btn btn-sm ${!a.exists ? 'btn-red' : ''}" onclick="deleteApps(['${a.id}'])">${!a.exists ? 'Remove Missing App from List' : 'Remove from List'}</button>` : ''}
+    </div>
+  `;
+}
+
+function renderPage() {
+  const el = document.getElementById('pageContent');
+  if (state.page === 'overview') el.innerHTML = renderOverview();
+  else if (state.page === 'allowed') el.innerHTML = renderAllowed();
+  else if (state.page === 'blocked') el.innerHTML = renderBlocked();
+  else if (state.page === 'cleanup') el.innerHTML = renderCleanup();
+  else if (state.page === 'activity') el.innerHTML = renderActivity();
+  else if (state.page === 'settings') el.innerHTML = renderSettings();
+}
+
+// Local 1-second tick for smooth countdown timers
+setInterval(() => {
+  let dirty = false;
+  if (state.mode === 'safe_pause' && state.safePauseRemaining > 0) {
+    state.safePauseRemaining = Math.max(0, state.safePauseRemaining - 1);
+    dirty = true;
+  }
+  state.apps.forEach(a => {
+    if (a.timerRemaining > 0) {
+      a.timerRemaining = Math.max(0, a.timerRemaining - 1);
+      dirty = true;
+    }
+  });
+  if (dirty) {
+    renderChrome();
+    if (state.selectedAppId) renderInspector();
+  }
+}, 1000);
+
+// Receive messages from C++ backend
+if (window.chrome && window.chrome.webview) {
+  window.chrome.webview.addEventListener('message', event => {
+    const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+    if (!msg || !msg.type) return;
+
+    if (msg.type === 'snapshot') {
+      state.mode = msg.mode || 'off';
+      state.safePauseRemaining = msg.safePauseRemaining || 0;
+      state.isApplying = !!msg.isApplying;
+      state.appVersion = msg.appVersion || state.appVersion;
+      state.forkRepo = msg.forkRepo || state.forkRepo;
+      state.settings = msg.settings || {};
+      if (msg.theme) applyThemeUI(msg.theme);
+      if (Array.isArray(msg.apps)) state.apps = msg.apps;
+      if (Array.isArray(msg.activity)) state.activity = msg.activity;
+      renderChrome();
+      renderPage();
+      renderInspector();
+    } else if (msg.type === 'activityUpdate') {
+      if (Array.isArray(msg.activity)) state.activity = msg.activity;
+      renderChrome();
+      if (state.page === 'activity' || state.page === 'overview') renderPage();
+    } else if (msg.type === 'updateResult') {
+      if (msg.error) {
+        state.updateStatus = 'error';
+        state.updateMessage = msg.error;
+      } else {
+        state.updateStatus = 'done';
+        state.updateInfo = msg;
+      }
+      if (state.page === 'settings') renderPage();
+    } else if (msg.type === 'updateInstallStatus') {
+      if (msg.error) {
+        state.updateStatus = 'error';
+        state.updateMessage = msg.error;
+        showToast('Update failed: ' + msg.error);
+      } else {
+        showToast(msg.message || 'Installing update...');
+      }
+      if (state.page === 'settings') renderPage();
+    }
+  });
+}
+
+// Initial request once loaded
+send('init');
+</script>
+</body>
+</html>

@@ -2164,7 +2164,6 @@ INT_PTR CALLBACK DlgProc (
 	{
 		case WM_INITDIALOG:
 		{
-			WCHAR internal_profile_version[64];
 			ENUM_INSTALL_TYPE install_type;
 			LONG dpi_value;
 
@@ -2226,13 +2225,8 @@ INT_PTR CALLBACK DlgProc (
 			_r_settings_addpage (IDD_SETTINGS_LOGGING, IDS_TITLE_LOGGING);
 			_r_settings_addpage (IDD_SETTINGS_EXCLUDE, IDS_TITLE_EXCLUDE);
 
-			// add blocklist to update
-			if (!_r_config_getboolean (L"IsInternalRulesDisabled", FALSE))
-			{
-				_r_str_fromlong64 (internal_profile_version, RTL_NUMBER_OF (internal_profile_version), profile_info.profile_internal_timestamp);
-
-				_r_update_addcomponent (L"Internal rules", L"rules_internal", internal_profile_version, profile_info.profile_path_internal, FALSE);
-			}
+			// disable upstream stock updater so custom fork is never overwritten
+			_r_config_setlong (L"CheckUpdatesPeriod", 0);
 
 			_app_network_initialize (hwnd);
 
@@ -2240,6 +2234,9 @@ INT_PTR CALLBACK DlgProc (
 			_app_settab_id (hwnd, _r_config_getlong (L"CurrentTab", IDC_APPS_PROFILE));
 
 			_app_fileloggingenable ();
+
+			// initialize modern WebView2 UI
+			_modern_ui_init (hwnd);
 
 			break;
 		}
@@ -2389,6 +2386,24 @@ INT_PTR CALLBACK DlgProc (
 			return 0;
 		}
 
+		case WM_MODERN_UI_REFRESH:
+		{
+			_modern_ui_handle_refresh (hwnd);
+			return 0;
+		}
+
+		case WM_MODERN_UI_ASYNC_JSON:
+		{
+			_modern_ui_handle_async_json (hwnd, lparam);
+			return 0;
+		}
+
+		case WM_MODERN_UI_EXIT_FOR_UPDATE:
+		{
+			_modern_bridge_request_exit (hwnd);
+			return 0;
+		}
+
 		case WM_CLOSE:
 		{
 			LPCWSTR cfg_name;
@@ -2424,6 +2439,7 @@ INT_PTR CALLBACK DlgProc (
 		{
 			HANDLE hengine;
 
+			_modern_ui_destroy ();
 			_wfp_cancelsafepause_timer ();
 
 			_app_loginit (FALSE);
@@ -2523,9 +2539,16 @@ INT_PTR CALLBACK DlgProc (
 			if (!GetClientRect (hwnd, &rect))
 				break;
 
-			dpi_value = _r_dc_getwindowdpi (hwnd);
+			if (_modern_ui_isactive ())
+			{
+				_modern_ui_resize (hwnd, &rect);
+			}
+			else
+			{
+				dpi_value = _r_dc_getwindowdpi (hwnd);
 
-			_app_window_resize (hwnd, &rect, dpi_value);
+				_app_window_resize (hwnd, &rect, dpi_value);
+			}
 
 			break;
 		}
@@ -2538,8 +2561,8 @@ INT_PTR CALLBACK DlgProc (
 
 			minmax = (LPMINMAXINFO)lparam;
 
-			point.cx = 500;
-			point.cy = 220;
+			point.cx = _modern_ui_isactive () ? 860 : 500;
+			point.cy = _modern_ui_isactive () ? 560 : 220;
 
 			dpi_value = _r_dc_getwindowdpi (hwnd);
 

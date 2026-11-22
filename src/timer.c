@@ -168,6 +168,8 @@ VOID CALLBACK _app_timer_callback (
 
 	_app_profile_save (hwnd);
 
+	_modern_ui_notify_change ();
+
 	if (_r_config_getboolean (L"IsNotificationsTimer", TRUE))
 	{
 		icon_id = NIIF_INFO;

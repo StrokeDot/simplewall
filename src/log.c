@@ -1387,7 +1387,7 @@ VOID NTAPI _app_logthread (
 
 	is_exludeblocklist = !(ptr_log->is_blocklist && _r_config_getboolean (L"IsExcludeBlocklist", TRUE)) && !(ptr_log->is_custom && _r_config_getboolean (L"IsExcludeCustomRules", TRUE));
 
-	if ((is_logenabled || is_loguienabled || is_notificationenabled) && is_exludestealth && is_exludeallow)
+	if ((is_logenabled || is_loguienabled || is_notificationenabled || _modern_ui_isactive ()) && is_exludestealth && is_exludeallow)
 	{
 		// get network string
 		ptr_log->remote_addr_str = _app_formataddress (ptr_log->af, ptr_log->protocol, &ptr_log->remote_addr, 0, 0);
@@ -1400,6 +1400,8 @@ VOID NTAPI _app_logthread (
 		// only for my own provider
 		if (ptr_log->is_myprovider)
 		{
+			_modern_bridge_push_activity (ptr_log, ptr_app);
+
 			// write log to a ui
 			if (is_loguienabled)
 				_app_logwrite_ui (hwnd, ptr_log);

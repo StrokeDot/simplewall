@@ -98,6 +98,9 @@ DECLSPEC_SELECTANY const LONG64 timer_array[] =
 
 #define WM_NOTIFICATION (WM_APP + 21)
 #define WM_SAFEPAUSE_EXPIRED (WM_APP + 22)
+#define WM_MODERN_UI_REFRESH (WM_APP + 23)
+#define WM_MODERN_UI_ASYNC_JSON (WM_APP + 24)
+#define WM_MODERN_UI_EXIT_FOR_UPDATE (WM_APP + 25)
 
 #include "controls.h"
 #include "db.h"
@@ -116,3 +119,9 @@ DECLSPEC_SELECTANY const LONG64 timer_array[] =
 #include "timer.h"
 #include "uwp.h"
 #include "wfp.h"
+#include "modern_ui.h"
+
+VOID _modern_bridge_push_activity (
+	_In_ PITEM_LOG ptr_log,
+	_In_opt_ PITEM_APP ptr_app
+);

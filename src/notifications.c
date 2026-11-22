@@ -128,6 +128,8 @@ BOOLEAN _app_notify_command (
 
 	_app_profile_save (hwnd);
 
+	_modern_ui_notify_change ();
+
 	return TRUE;
 }
 

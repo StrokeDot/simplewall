@@ -2885,6 +2885,8 @@ VOID NTAPI _wfp_applythread (
 	_app_profile_save (context->hwnd);
 
 	_r_queuedlock_releaseshared (&lock_apply);
+
+	_modern_ui_notify_change ();
 }
 
 VOID _wfp_firewallenable (

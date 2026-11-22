@@ -99,7 +99,7 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <TargetName>$(ProjectName)</TargetName>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\;.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\include\</IncludePath>
     <GenerateManifest>false</GenerateManifest>
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <CodeAnalysisRuleSet>MixedRecommendedRules.ruleset</CodeAnalysisRuleSet>
@@ -107,7 +107,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <TargetName>$(ProjectName)</TargetName>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\;.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\include\</IncludePath>
     <GenerateManifest>false</GenerateManifest>
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <CodeAnalysisRuleSet>MixedRecommendedRules.ruleset</CodeAnalysisRuleSet>
@@ -116,7 +116,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>$(SolutionDir)bin\$(PlatformArchitecture)\</OutDir>
     <TargetName>$(ProjectName)</TargetName>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\;.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\include\</IncludePath>
     <GenerateManifest>false</GenerateManifest>
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <CodeAnalysisRuleSet>MixedRecommendedRules.ruleset</CodeAnalysisRuleSet>
@@ -124,7 +124,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)bin\$(PlatformArchitecture)\</OutDir>
     <TargetName>$(ProjectName)</TargetName>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\;.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\include\</IncludePath>
     <GenerateManifest>false</GenerateManifest>
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <CodeAnalysisRuleSet>MixedRecommendedRules.ruleset</CodeAnalysisRuleSet>
@@ -132,7 +132,8 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)bin\$(PlatformArchitecture)\</OutDir>
     <TargetName>$(ProjectName)</TargetName>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\;.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\include\</IncludePath>
+    <LibraryPath>$(LibraryPath);.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\x64\</LibraryPath>
     <GenerateManifest>false</GenerateManifest>
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <CodeAnalysisRuleSet>MixedRecommendedRules.ruleset</CodeAnalysisRuleSet>
@@ -140,7 +141,8 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)bin\$(PlatformArchitecture)\</OutDir>
     <TargetName>$(ProjectName)</TargetName>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);.\..\routine\src\;.\src\include\;.\src\;.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\include\</IncludePath>
+    <LibraryPath>$(LibraryPath);.\packages\Microsoft.Web.WebView2.1.0.4370.26\build\native\x64\</LibraryPath>
     <GenerateManifest>false</GenerateManifest>
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <CodeAnalysisRuleSet>MixedRecommendedRules.ruleset</CodeAnalysisRuleSet>
@@ -396,6 +398,8 @@
     <ClCompile Include="src\uwp.cpp" />
     <ClCompile Include="src\wfp.c" />
     <ClCompile Include="src\messages.c" />
+    <ClCompile Include="src\modern_ui_bridge.c" />
+    <ClCompile Include="src\modern_ui.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\routine\src\ntapi.h" />
@@ -414,6 +418,7 @@
     <ClInclude Include="src\listview.h" />
     <ClInclude Include="src\log.h" />
     <ClInclude Include="src\main.h" />
+    <ClInclude Include="src\modern_ui.h" />
     <ClInclude Include="src\network.h" />
     <ClInclude Include="src\notifications.h" />
     <ClInclude Include="src\packages.h" />
