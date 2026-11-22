@@ -97,6 +97,7 @@ struct FileMeta
 	std::wstring parentApp;
 	std::wstring signature;
 	std::wstring iconDataUrl;
+	std::wstring iconSource;
 };
 
 struct AlertItem
@@ -599,7 +600,7 @@ std::wstring LoadPngFileAsDataUrl (const std::wstring &pngPath)
 	return result;
 }
 
-std::wstring FindBestScaledPng (const std::wstring &pkgRoot, const std::wstring &relLogo)
+std::wstring FindBestScaledPng (const std::wstring &pkgRoot, const std::wstring &relLogo, std::wstring *outPickedPath = nullptr)
 {
 	if (relLogo.empty ()) return {};
 
@@ -652,15 +653,29 @@ std::wstring FindBestScaledPng (const std::wstring &pkgRoot, const std::wstring 
 	}
 
 	if (!bestPath.empty ())
-		return LoadPngFileAsDataUrl (bestPath);
+	{
+		std::wstring data = LoadPngFileAsDataUrl (bestPath);
+		if (!data.empty ())
+		{
+			if (outPickedPath) *outPickedPath = bestPath;
+			return data;
+		}
+	}
 
 	if (GetFileAttributesW (full.c_str ()) != INVALID_FILE_ATTRIBUTES)
-		return LoadPngFileAsDataUrl (full);
+	{
+		std::wstring data = LoadPngFileAsDataUrl (full);
+		if (!data.empty ())
+		{
+			if (outPickedPath) *outPickedPath = full;
+			return data;
+		}
+	}
 
 	return {};
 }
 
-std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path)
+std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path, std::wstring *outSource = nullptr)
 {
 	std::wstring low = ToLower (path);
 	const wchar_t *markers[] = { L"\\windowsapps\\", L"\\systemapps\\" };
@@ -716,8 +731,13 @@ std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path)
 				std::wstring rel = extractAttr (a);
 				if (!rel.empty ())
 				{
-					std::wstring data = FindBestScaledPng (pkgRoot, rel);
-					if (!data.empty ()) return data;
+					std::wstring picked;
+					std::wstring data = FindBestScaledPng (pkgRoot, rel, &picked);
+					if (!data.empty ())
+					{
+						if (outSource) *outSource = L"Store package asset (" + ExtractFileName (picked) + L")";
+						return data;
+					}
 				}
 			}
 
@@ -726,8 +746,13 @@ std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path)
 			if (t1 != std::string::npos && t2 != std::string::npos && t2 > t1 + 6)
 			{
 				std::wstring rel = Utf8ToWide (xml.substr (t1 + 6, t2 - (t1 + 6)));
-				std::wstring data = FindBestScaledPng (pkgRoot, rel);
-				if (!data.empty ()) return data;
+				std::wstring picked;
+				std::wstring data = FindBestScaledPng (pkgRoot, rel, &picked);
+				if (!data.empty ())
+				{
+					if (outSource) *outSource = L"Store package asset (" + ExtractFileName (picked) + L")";
+					return data;
+				}
 			}
 		}
 	}
@@ -740,8 +765,13 @@ std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path)
 	};
 	for (const wchar_t *fb : fallbacks)
 	{
-		std::wstring data = FindBestScaledPng (pkgRoot, fb);
-		if (!data.empty ()) return data;
+		std::wstring picked;
+		std::wstring data = FindBestScaledPng (pkgRoot, fb, &picked);
+		if (!data.empty ())
+		{
+			if (outSource) *outSource = L"Store package asset (" + ExtractFileName (picked) + L")";
+			return data;
+		}
 	}
 	return {};
 }
@@ -909,7 +939,7 @@ bool IsGenericSystemDir (const std::wstring &dir)
 	return false;
 }
 
-std::wstring FindSiblingOrParentExeIconDataUrl (const std::wstring &exePath)
+std::wstring FindSiblingOrParentExeIconDataUrl (const std::wstring &exePath, std::wstring *outSource = nullptr)
 {
 	size_t lastSlash = exePath.find_last_of (L"\\/");
 	if (lastSlash == std::wstring::npos) return {};
@@ -979,7 +1009,10 @@ std::wstring FindSiblingOrParentExeIconDataUrl (const std::wstring &exePath)
 			if (cands[i].score < -50) break;
 			std::wstring hd = ExtractHighestResExeIconDataUrl (cands[i].path);
 			if (!hd.empty ())
+			{
+				if (outSource) *outSource = L"Inherited from " + ExtractFileName (cands[i].path);
 				return hd;
+			}
 		}
 
 		if (dirSlash == std::wstring::npos)
@@ -990,24 +1023,28 @@ std::wstring FindSiblingOrParentExeIconDataUrl (const std::wstring &exePath)
 	return {};
 }
 
-std::wstring ExtractIconDataUrl (const std::wstring &path)
+std::wstring ExtractIconDataUrl (const std::wstring &path, std::wstring *outSource = nullptr)
 {
+	if (outSource) outSource->clear ();
 	if (path.empty ()) return {};
 
 	// 1. Direct PE RT_GROUP_ICON extraction: pulls untouched native 256x256 HD transparent PNG icons!
 	std::wstring nativeHd = ExtractHighestResExeIconDataUrl (path);
 	if (!nativeHd.empty ())
+	{
+		if (outSource) *outSource = L"Embedded HD icon (" + ExtractFileName (path) + L")";
 		return nativeHd;
+	}
 
 	// 2. For Microsoft Store / WindowsApps / SystemApps without an embedded icon, load HD unplated Store PNG
-	std::wstring storeLogo = FindWindowsAppsLogoDataUrl (path);
+	std::wstring storeLogo = FindWindowsAppsLogoDataUrl (path, outSource);
 	if (!storeLogo.empty ())
 		return storeLogo;
 
 	// 3. Smart Sibling & Parent Folder HD Logo Inheritance:
 	// Background services/helpers (expressvpn-service.exe, opera_autoupdate.exe, steamwebhelper.exe, codex.exe)
 	// have 0 embedded icons, while the main app exe with the real HD logo lives in the same or parent folder!
-	std::wstring parentHd = FindSiblingOrParentExeIconDataUrl (path);
+	std::wstring parentHd = FindSiblingOrParentExeIconDataUrl (path, outSource);
 	if (!parentHd.empty ())
 		return parentHd;
 
@@ -1017,7 +1054,11 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 	{
 		std::wstring result = EncodeHIconToDataUrl (hIcon);
 		DestroyIcon (hIcon);
-		if (!result.empty ()) return result;
+		if (!result.empty ())
+		{
+			if (outSource) *outSource = L"Executable icon (" + ExtractFileName (path) + L")";
+			return result;
+		}
 	}
 
 	// 5. Fallback to crisp 48x48 Shell ExtraLarge icon (full alpha transparency)
@@ -1033,7 +1074,11 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 				std::wstring result = EncodeHIconToDataUrl (hShellIcon);
 				DestroyIcon (hShellIcon);
 				iml->Release ();
-				if (!result.empty ()) return result;
+				if (!result.empty ())
+				{
+					if (outSource) *outSource = L"Windows default shell icon";
+					return result;
+				}
 			}
 			iml->Release ();
 		}
@@ -1046,6 +1091,7 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 
 	std::wstring result = EncodeHIconToDataUrl (sfi.hIcon);
 	DestroyIcon (sfi.hIcon);
+	if (!result.empty () && outSource) *outSource = L"Windows default shell icon";
 	return result;
 }
 
@@ -1442,7 +1488,7 @@ FileMeta GetFileMeta (const std::wstring &path, bool exists)
 		}
 
 		meta.signature = ExtractFileSignature (path);
-		meta.iconDataUrl = ExtractIconDataUrl (path);
+		meta.iconDataUrl = ExtractIconDataUrl (path, &meta.iconSource);
 	}
 
 	{
@@ -1592,6 +1638,9 @@ std::wstring BuildFullSnapshotJson ()
 		bool hasCustomLogo = false;
 		std::wstring customLogo = GetCustomLogoDataUrl (a.app_hash, &hasCustomLogo);
 		const std::wstring &finalIcon = hasCustomLogo ? customLogo : meta.iconDataUrl;
+		std::wstring finalIconSource = hasCustomLogo
+			? L"Custom saved logo"
+			: (meta.iconSource.empty () ? (finalIcon.empty () ? L"Default letter badge" : L"Detected logo") : meta.iconSource);
 
 		ss << L"{\"id\":\"" << a.app_hash << L"\""
 			<< L",\"name\":\"" << JsonEscape (name.empty () ? fileName : name) << L"\""
@@ -1612,6 +1661,7 @@ std::wstring BuildFullSnapshotJson ()
 			<< L",\"parentApp\":\"" << JsonEscape (meta.parentApp) << L"\""
 			<< L",\"signature\":\"" << JsonEscape (sig) << L"\""
 			<< L",\"iconDataUrl\":\"" << JsonEscape (finalIcon) << L"\""
+			<< L",\"iconSource\":\"" << JsonEscape (finalIconSource) << L"\""
 			<< L",\"hasCustomLogo\":" << (hasCustomLogo ? L"true" : L"false")
 			<< L"}";
 	}
@@ -2767,6 +2817,44 @@ void PickCustomLogoFile (ULONG_PTR appHash)
 	CloseHandle (h);
 }
 
+bool ApplyDataUrlLogo (ULONG_PTR appHash, const std::wstring &dataUrl)
+{
+	if (!appHash || !dataUrl.starts_with (L"data:image/"))
+		return false;
+
+	size_t marker = dataUrl.find (L";base64,");
+	if (marker == std::wstring::npos || marker <= 11)
+		return false;
+
+	std::wstring mime = ToLower (dataUrl.substr (11, marker - 11));
+	std::wstring ext = L"png";
+	if (mime == L"svg+xml") ext = L"svg";
+	else if (mime == L"webp") ext = L"webp";
+	else if (mime == L"jpeg" || mime == L"jpg") ext = L"jpg";
+
+	const wchar_t *b64 = dataUrl.c_str () + marker + 8;
+	DWORD b64Len = (DWORD)(dataUrl.size () - (marker + 8));
+	if (b64Len == 0) return false;
+
+	DWORD binLen = 0;
+	if (!CryptStringToBinaryW (b64, b64Len, CRYPT_STRING_BASE64, nullptr, &binLen, nullptr, nullptr) ||
+		binLen == 0 || binLen > 2 * 1024 * 1024)
+	{
+		return false;
+	}
+
+	std::vector<BYTE> bytes (binLen);
+	if (!CryptStringToBinaryW (b64, b64Len, CRYPT_STRING_BASE64, bytes.data (), &binLen, nullptr, nullptr))
+		return false;
+
+	if (SaveCustomLogoBytes (appHash, ext, bytes.data (), binLen))
+	{
+		WriteAuditLogLine (L"LOGO", L"Applied logo from in-app library");
+		return true;
+	}
+	return false;
+}
+
 // ---- Incoming message dispatcher (UI thread) ----
 
 void HandleWebMessage (const std::wstring &json)
@@ -2945,6 +3033,18 @@ void HandleWebMessage (const std::wstring &json)
 		{
 			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
 			if (h) DeleteCustomLogo (h);
+		}
+	}
+	else if (action == L"applyDataUrlLogo")
+	{
+		std::wstring idStr, dataUrl;
+		if (ExtractJsonString (json, L"id", idStr) && ExtractJsonString (json, L"dataUrl", dataUrl))
+		{
+			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+			if (h && ApplyDataUrlLogo (h, dataUrl))
+				PostJsonToWebView (L"{\"type\":\"logoApplied\",\"ok\":true}");
+			else
+				PostJsonToWebView (L"{\"type\":\"logoApplied\",\"ok\":false,\"error\":\"Could not save library logo.\"}");
 		}
 	}
 }

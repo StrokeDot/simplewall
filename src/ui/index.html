@@ -708,6 +708,17 @@ html, body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+  max-height: 224px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.logo-source-line {
+  font-size: 11.5px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .logo-tile {
   display: flex;
@@ -873,7 +884,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.4</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.5</div>
       </div>
     </div>
 
@@ -976,7 +987,7 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.2.4',
+  appVersion: '4.2.5',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
@@ -988,6 +999,8 @@ const state = {
   includeSystem: false,
   selectedAppId: null,
   logoPickerOpen: false,
+  logoPickerTab: 'library',
+  logoLibraryFilter: '',
   logoQuery: '',
   logoSearching: false,
   logoResults: null,
@@ -1161,20 +1174,75 @@ function defaultLogoQuery(a) {
   return raw.split(/\s+/).slice(0, 2).join(' ');
 }
 
+function getAppLogoLibrary() {
+  const seen = new Set();
+  const out = [];
+  for (const app of state.apps) {
+    if (!app.iconDataUrl) continue;
+    if (seen.has(app.iconDataUrl)) continue;
+    seen.add(app.iconDataUrl);
+    out.push({
+      id: app.id,
+      name: app.name || app.fileName || 'App',
+      fileName: app.fileName || '',
+      source: app.iconSource || '',
+      dataUrl: app.iconDataUrl
+    });
+  }
+  out.sort((x, y) => x.name.localeCompare(y.name));
+  return out;
+}
+
 function toggleLogoPicker() {
   const a = state.apps.find(x => x.id === state.selectedAppId);
   if (!a) return;
   state.logoPickerOpen = !state.logoPickerOpen;
   if (state.logoPickerOpen) {
+    state.logoPickerTab = 'library';
+    state.logoLibraryFilter = '';
     state.logoQuery = defaultLogoQuery(a);
     state.logoResults = null;
     state.logoError = '';
-    if (state.logoQuery) {
-      searchOnlineLogos(state.logoQuery);
-      return;
-    }
   }
   renderInspector();
+}
+
+function setLogoPickerTab(tab) {
+  state.logoPickerTab = tab;
+  if (tab === 'online' && !state.logoResults && !state.logoSearching && state.logoQuery) {
+    searchOnlineLogos(state.logoQuery);
+    return;
+  }
+  renderInspector();
+}
+
+function renderLogoLibraryGridHtml(library, query) {
+  const lq = (query || '').trim().toLowerCase();
+  const filteredLib = lq
+    ? library.filter(it => `${it.name} ${it.fileName} ${it.source}`.toLowerCase().includes(lq))
+    : library;
+  return filteredLib.length
+    ? `<div class="logo-grid">${filteredLib.map(it =>
+        `<button class="logo-tile" title="${esc(it.name)}${it.source ? ' · ' + esc(it.source) : ''}" onclick="applyLibraryLogo('${it.id}')">
+          <img src="${it.dataUrl}" alt="">
+          <span>${esc(it.name)}</span>
+        </button>`
+      ).join('')}</div>`
+    : `<div style="font-size:12px;color:var(--text-3);padding:6px 0">No matching logos in your app library. Try the Online HD tab or pick a file from your PC.</div>`;
+}
+
+function onLogoLibFilter(val) {
+  state.logoLibraryFilter = val;
+  const host = document.getElementById('logoLibGridHost');
+  if (host) host.innerHTML = renderLogoLibraryGridHtml(getAppLogoLibrary(), val);
+}
+
+function applyLibraryLogo(sourceAppId) {
+  const target = state.apps.find(x => x.id === state.selectedAppId);
+  const src = state.apps.find(x => x.id === sourceAppId);
+  if (!target || !src || !src.iconDataUrl) return;
+  showToast(`Applied ${src.name || src.fileName} logo`);
+  send('applyDataUrlLogo', { id: target.id, dataUrl: src.iconDataUrl });
 }
 
 function searchOnlineLogos(query) {
@@ -1732,32 +1800,54 @@ function renderInspector() {
 
   let logoPickerHtml = '';
   if (state.logoPickerOpen) {
-    let gridBody = '';
-    if (state.logoSearching) {
-      gridBody = `<div style="font-size:12px;color:var(--accent);padding:8px 0">Searching 3,500+ HD transparent logos...</div>`;
-    } else if (state.logoError) {
-      gridBody = `<div style="font-size:12px;color:var(--red);padding:6px 0">${esc(state.logoError)}</div>`;
-    } else if (Array.isArray(state.logoResults)) {
-      if (state.logoResults.length) {
-        gridBody = `<div class="logo-grid">${state.logoResults.map(it =>
-          `<button class="logo-tile" title="Use ${esc(it.slug)}" onclick="applyOnlineLogo('${esc(it.slug)}')">
-            <img src="${it.dataUrl}" alt="">
-            <span>${esc(it.slug)}</span>
-          </button>`
-        ).join('')}</div>`;
-      } else {
-        gridBody = `<div style="font-size:12px;color:var(--text-3);padding:6px 0">No matching online logos found. Try a shorter keyword (e.g. "opera", "java", "xbox") or pick any PNG/ICO from your PC below.</div>`;
+    const library = getAppLogoLibrary();
+    let tabBody = '';
+
+    if (state.logoPickerTab === 'library') {
+      tabBody = `
+        <div class="logo-search-row">
+          <input class="logo-search-input" id="logoLibFilter" type="text" placeholder="Filter ${library.length} logos already in SimpleWall..." value="${esc(state.logoLibraryFilter)}" oninput="onLogoLibFilter(this.value)">
+        </div>
+        <div id="logoLibGridHost">${renderLogoLibraryGridHtml(library, state.logoLibraryFilter)}</div>
+      `;
+    } else {
+      let gridBody = '';
+      if (state.logoSearching) {
+        gridBody = `<div style="font-size:12px;color:var(--accent);padding:8px 0">Searching 3,500+ HD transparent logos...</div>`;
+      } else if (state.logoError) {
+        gridBody = `<div style="font-size:12px;color:var(--red);padding:6px 0">${esc(state.logoError)}</div>`;
+      } else if (Array.isArray(state.logoResults)) {
+        if (state.logoResults.length) {
+          gridBody = `<div class="logo-grid">${state.logoResults.map(it =>
+            `<button class="logo-tile" title="Use ${esc(it.slug)}" onclick="applyOnlineLogo('${esc(it.slug)}')">
+              <img src="${it.dataUrl}" alt="">
+              <span>${esc(it.slug)}</span>
+            </button>`
+          ).join('')}</div>`;
+        } else {
+          gridBody = `<div style="font-size:12px;color:var(--text-3);padding:6px 0">No matching online logos found. Try a shorter keyword (e.g. "opera", "java", "xbox") or pick a file from your PC.</div>`;
+        }
       }
+      tabBody = `
+        <div class="logo-search-row">
+          <input class="logo-search-input" id="logoSearchInput" type="text" placeholder="Search online (e.g. opera, steam, java)..." value="${esc(state.logoQuery)}" oninput="state.logoQuery=this.value" onkeydown="if(event.key==='Enter')searchOnlineLogos(this.value)">
+          <button class="btn btn-sm btn-primary" onclick="searchOnlineLogos(document.getElementById('logoSearchInput').value)">Search</button>
+        </div>
+        ${gridBody}
+      `;
     }
 
     logoPickerHtml = `
       <div class="logo-picker">
-        <div class="info-box-title">Change HD Logo</div>
-        <div class="logo-search-row">
-          <input class="logo-search-input" id="logoSearchInput" type="text" placeholder="Search logo (e.g. opera, steam, java)..." value="${esc(state.logoQuery)}" oninput="state.logoQuery=this.value" onkeydown="if(event.key==='Enter')searchOnlineLogos(this.value)">
-          <button class="btn btn-sm btn-primary" onclick="searchOnlineLogos(document.getElementById('logoSearchInput').value)">Search</button>
+        <div class="logo-source-line">
+          <div class="info-box-title">Change Logo</div>
+          <div class="segmented">
+            <button class="${state.logoPickerTab==='library'?'active':''}" onclick="setLogoPickerTab('library')">App Library (${library.length})</button>
+            <button class="${state.logoPickerTab==='online'?'active':''}" onclick="setLogoPickerTab('online')">Online HD</button>
+          </div>
         </div>
-        ${gridBody}
+        <div style="font-size:11.5px;color:var(--text-3)">Current source: <span style="color:var(--text-2)">${esc(a.iconSource || 'Default')}</span></div>
+        ${tabBody}
         <div class="action-row">
           <button class="btn btn-sm" onclick="pickCustomLogoFile()">Choose Image File...</button>
           ${a.hasCustomLogo ? `<button class="btn btn-sm btn-red" onclick="resetCustomLogo()">Reset Default</button>` : ''}
@@ -1805,6 +1895,7 @@ function renderInspector() {
         <div class="info-label">Where it came from (App / Folder)</div>
         <div class="info-value">${esc(origin)}</div>
       </div>
+      ${a.iconSource ? `<div class="info-field"><div class="info-label">Logo Source</div><div class="info-value">${esc(a.iconSource)}</div></div>` : ''}
       ${a.fileVersion ? `<div class="info-field"><div class="info-label">Version</div><div class="info-value">${esc(a.fileVersion)}</div></div>` : ''}
       <div class="info-field">
         <div class="info-label">Added to firewall</div>
