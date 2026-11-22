@@ -663,12 +663,20 @@ std::wstring FindBestScaledPng (const std::wstring &pkgRoot, const std::wstring 
 std::wstring FindWindowsAppsLogoDataUrl (const std::wstring &path)
 {
 	std::wstring low = ToLower (path);
-	const std::wstring marker = L"\\windowsapps\\";
-	size_t idx = low.find (marker);
-	if (idx == std::wstring::npos)
+	const wchar_t *markers[] = { L"\\windowsapps\\", L"\\systemapps\\" };
+	size_t pkgStart = std::wstring::npos;
+	for (const wchar_t *m : markers)
+	{
+		size_t idx = low.find (m);
+		if (idx != std::wstring::npos)
+		{
+			pkgStart = idx + wcslen (m);
+			break;
+		}
+	}
+	if (pkgStart == std::wstring::npos)
 		return {};
 
-	size_t pkgStart = idx + marker.size ();
 	size_t pkgEnd = path.find (L'\\', pkgStart);
 	std::wstring pkgRoot = (pkgEnd == std::wstring::npos) ? path : path.substr (0, pkgEnd);
 
@@ -868,6 +876,120 @@ std::wstring ExtractHighestResExeIconDataUrl (const std::wstring &path)
 	return result;
 }
 
+bool IsGenericSystemDir (const std::wstring &dir)
+{
+	if (dir.size () <= 3) return true; // drive root like C:\ or C:
+	std::wstring low = ToLower (dir);
+	while (!low.empty () && (low.back () == L'\\' || low.back () == L'/'))
+		low.pop_back ();
+	if (low.size () <= 2) return true;
+
+	// Never borrow icons from Windows OS directories or top-level shared roots
+	if (low.find (L"\\windows\\system32") != std::wstring::npos ||
+		low.find (L"\\windows\\syswow64") != std::wstring::npos ||
+		low.ends_with (L"\\windows") ||
+		low.ends_with (L"\\windows\\winsxs") ||
+		low.ends_with (L"\\windows\\systemapps") ||
+		low.ends_with (L"\\windowsapps") ||
+		low.ends_with (L"\\program files") ||
+		low.ends_with (L"\\program files (x86)") ||
+		low.ends_with (L"\\programdata") ||
+		low.ends_with (L"\\common files") ||
+		low.ends_with (L"\\appdata") ||
+		low.ends_with (L"\\appdata\\local") ||
+		low.ends_with (L"\\appdata\\roaming") ||
+		low.ends_with (L"\\appdata\\local\\programs") ||
+		low.ends_with (L"\\downloads") ||
+		low.ends_with (L"\\desktop") ||
+		low.ends_with (L"\\temp") ||
+		low.ends_with (L"\\users"))
+	{
+		return true;
+	}
+	return false;
+}
+
+std::wstring FindSiblingOrParentExeIconDataUrl (const std::wstring &exePath)
+{
+	size_t lastSlash = exePath.find_last_of (L"\\/");
+	if (lastSlash == std::wstring::npos) return {};
+
+	std::wstring selfLow = ToLower (exePath);
+	std::wstring curDir = exePath.substr (0, lastSlash);
+
+	// Walk same folder + up to 3 parent folders (e.g. Steam\bin\cef\cef.win64 -> Steam\steam.exe)
+	for (int depth = 0; depth <= 3; ++depth)
+	{
+		if (IsGenericSystemDir (curDir))
+			break;
+
+		// Folder name for matching canonical main app executable (e.g. "ExpressVPN" -> "expressvpn-client.exe")
+		size_t dirSlash = curDir.find_last_of (L"\\/");
+		std::wstring dirNameLow = ToLower ((dirSlash == std::wstring::npos) ? curDir : curDir.substr (dirSlash + 1));
+
+		struct ExeCand { std::wstring path; int score; };
+		std::vector<ExeCand> cands;
+
+		WIN32_FIND_DATAW fd = {};
+		HANDLE hFind = FindFirstFileW ((curDir + L"\\*.exe").c_str (), &fd);
+		if (hFind != INVALID_HANDLE_VALUE)
+		{
+			int scanned = 0;
+			do
+			{
+				if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					continue;
+				if (++scanned > 40) break;
+
+				std::wstring full = curDir + L"\\" + fd.cFileName;
+				if (ToLower (full) == selfLow)
+					continue;
+
+				std::wstring nameLow = ToLower (fd.cFileName);
+				std::wstring stem = nameLow.ends_with (L".exe") ? nameLow.substr (0, nameLow.size () - 4) : nameLow;
+
+				int score = 10;
+				if (!dirNameLow.empty ())
+				{
+					if (stem == dirNameLow) score += 150;
+					else if (stem.find (dirNameLow) != std::wstring::npos || dirNameLow.find (stem) != std::wstring::npos) score += 90;
+				}
+				if (stem.find (L"client") != std::wstring::npos || stem.find (L"app") != std::wstring::npos || stem.find (L"gui") != std::wstring::npos)
+					score += 40;
+				if (stem.find (L"unins") != std::wstring::npos || stem.find (L"crash") != std::wstring::npos ||
+					stem.find (L"setup") != std::wstring::npos || stem.find (L"install") != std::wstring::npos ||
+					stem.find (L"report") != std::wstring::npos || stem.find (L"stub") != std::wstring::npos)
+					score -= 100;
+				if (stem.find (L"update") != std::wstring::npos || stem.find (L"helper") != std::wstring::npos ||
+					stem.find (L"service") != std::wstring::npos || stem.find (L"daemon") != std::wstring::npos)
+					score -= 40;
+
+				cands.push_back ({ std::move (full), score });
+			} while (FindNextFileW (hFind, &fd));
+			FindClose (hFind);
+		}
+
+		std::sort (cands.begin (), cands.end (), [] (const ExeCand &a, const ExeCand &b) {
+			return a.score > b.score;
+		});
+
+		size_t tryLimit = (std::min)(cands.size (), (size_t)8);
+		for (size_t i = 0; i < tryLimit; ++i)
+		{
+			if (cands[i].score < -50) break;
+			std::wstring hd = ExtractHighestResExeIconDataUrl (cands[i].path);
+			if (!hd.empty ())
+				return hd;
+		}
+
+		if (dirSlash == std::wstring::npos)
+			break;
+		curDir = curDir.substr (0, dirSlash);
+	}
+
+	return {};
+}
+
 std::wstring ExtractIconDataUrl (const std::wstring &path)
 {
 	if (path.empty ()) return {};
@@ -877,12 +999,19 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 	if (!nativeHd.empty ())
 		return nativeHd;
 
-	// 2. For Microsoft Store / WindowsApps executables or packages without an embedded icon, load HD unplated Store PNG
+	// 2. For Microsoft Store / WindowsApps / SystemApps without an embedded icon, load HD unplated Store PNG
 	std::wstring storeLogo = FindWindowsAppsLogoDataUrl (path);
 	if (!storeLogo.empty ())
 		return storeLogo;
 
-	// 3. Fallback to PrivateExtractIconsW 64x64 / 48x48
+	// 3. Smart Sibling & Parent Folder HD Logo Inheritance:
+	// Background services/helpers (expressvpn-service.exe, opera_autoupdate.exe, steamwebhelper.exe, codex.exe)
+	// have 0 embedded icons, while the main app exe with the real HD logo lives in the same or parent folder!
+	std::wstring parentHd = FindSiblingOrParentExeIconDataUrl (path);
+	if (!parentHd.empty ())
+		return parentHd;
+
+	// 4. Fallback to PrivateExtractIconsW 64x64 / 48x48
 	HICON hIcon = nullptr;
 	if (PrivateExtractIconsW (path.c_str (), 0, 64, 64, &hIcon, nullptr, 1, 0) >= 1 && hIcon)
 	{
@@ -891,7 +1020,7 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 		if (!result.empty ()) return result;
 	}
 
-	// 4. Fallback to crisp 48x48 Shell ExtraLarge icon (full alpha transparency)
+	// 5. Fallback to crisp 48x48 Shell ExtraLarge icon (full alpha transparency)
 	SHFILEINFOW sfi = {};
 	if (SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_SYSICONINDEX))
 	{
@@ -910,7 +1039,7 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 		}
 	}
 
-	// 5. Final fallback to standard 32x32 shell icon
+	// 6. Final fallback to standard 32x32 shell icon
 	RtlZeroMemory (&sfi, sizeof (sfi));
 	if (!SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_ICON | SHGFI_LARGEICON) || !sfi.hIcon)
 		return {};

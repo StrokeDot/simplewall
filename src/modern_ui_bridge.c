@@ -91,7 +91,14 @@ BOOLEAN _modern_bridge_get_apps (
 			dst->is_blocked = _app_isappblocked (ptr_app);
 			dst->is_silent = !!ptr_app->is_silent;
 			dst->is_system = _app_isdisabledremoval (ptr_app->app_hash);
-			dst->exists = _app_isappexists (ptr_app);
+			if (ptr_app->type == DATA_APP_REGULAR && !dst->is_system)
+			{
+				dst->exists = (ptr_app->real_path && _r_fs_exists (&ptr_app->real_path->sr)) ? TRUE : FALSE;
+			}
+			else
+			{
+				dst->exists = _app_isappexists (ptr_app);
+			}
 
 			if (ptr_app->timer > now && _app_istimerset (ptr_app))
 			{
@@ -312,6 +319,7 @@ VOID _modern_bridge_delete_apps (
 		if (!ptr_app)
 			continue;
 
+		ptr_app->is_undeletable = FALSE;
 		_app_deleteappitem (hwnd, ptr_app->type, app_hash);
 		_app_timer_reset (NULL, ptr_app);
 		_app_notify_freeobject (NULL, ptr_app);

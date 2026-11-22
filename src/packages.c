@@ -232,7 +232,7 @@ VOID _app_package_getpackagebysid (
 		_app_package_parsepath (&real_path);
 
 	//_r_queuedlock_acquireexclusive (&lock_apps);
-	app_hash = _app_addapplication (NULL, DATA_APP_UWP, key_name, display_name, NULL);
+	app_hash = _app_addapplication (NULL, DATA_APP_UWP, key_name, display_name, real_path);
 	//_r_queuedlock_releaseexclusive (&lock_apps);
 
 	if (app_hash)
