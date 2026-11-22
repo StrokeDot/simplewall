@@ -389,13 +389,21 @@ html, body {
 }
 
 .inspector-backdrop {
-  display: none;
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(2px);
   z-index: 40;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1), visibility 220ms;
 }
-.inspector-backdrop.open { display: block; }
+.inspector-backdrop.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
 
 /* Custom scrollbars */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -630,7 +638,7 @@ html, body {
   flex-shrink: 0;
 }
 
-/* Inspector Drawer — clean slide-over so the list NEVER gets squished! */
+/* Inspector Drawer — silky 60fps slide-over so the list NEVER gets squished! */
 .inspector {
   position: absolute;
   top: 0;
@@ -641,13 +649,24 @@ html, body {
   border-left: 1px solid var(--border-strong);
   box-shadow: var(--shadow);
   z-index: 50;
-  display: none;
+  display: flex;
   flex-direction: column;
   overflow-y: auto;
   padding: 18px;
   gap: 14px;
+  transform: translateX(100%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transition: transform 250ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease, visibility 250ms;
 }
-.inspector.open { display: flex; }
+.inspector.open {
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
 
 @media (min-width: 1220px) {
   .inspector {
@@ -655,8 +674,20 @@ html, body {
     width: 360px;
     flex-shrink: 0;
     box-shadow: none;
+    margin-right: -360px;
+    transform: translateX(36px);
+    transition: margin-right 250ms cubic-bezier(0.22, 1, 0.36, 1), transform 250ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease, visibility 250ms;
   }
-  .inspector-backdrop.open { display: none; }
+  .inspector.open {
+    margin-right: 0;
+    transform: translateX(0);
+  }
+  .inspector-backdrop.open { opacity: 0; visibility: hidden; pointer-events: none; }
+}
+
+@keyframes pickerIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .inspector-top {
@@ -685,6 +716,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  animation: pickerIn 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .logo-search-row {
   display: flex;
@@ -884,7 +916,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.5</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.6</div>
       </div>
     </div>
 
@@ -987,10 +1019,11 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.2.5',
+  appVersion: '4.2.6',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
+  savedLogos: [],
   activity: [],
   search: '',
   filterAllowed: 'all',
@@ -1174,15 +1207,30 @@ function defaultLogoQuery(a) {
   return raw.split(/\s+/).slice(0, 2).join(' ');
 }
 
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.selectedAppId) {
+    closeInspector();
+  }
+});
+
 function getAppLogoLibrary() {
   const seen = new Set();
   const out = [];
+  for (const s of (state.savedLogos || [])) {
+    if (!s || !s.dataUrl || seen.has(s.dataUrl)) continue;
+    seen.add(s.dataUrl);
+    out.push({
+      name: s.name || 'Saved Logo',
+      fileName: '',
+      source: 'Uploaded / Saved Library',
+      dataUrl: s.dataUrl
+    });
+  }
   for (const app of state.apps) {
     if (!app.iconDataUrl) continue;
     if (seen.has(app.iconDataUrl)) continue;
     seen.add(app.iconDataUrl);
     out.push({
-      id: app.id,
       name: app.name || app.fileName || 'App',
       fileName: app.fileName || '',
       source: app.iconSource || '',
@@ -1190,6 +1238,7 @@ function getAppLogoLibrary() {
     });
   }
   out.sort((x, y) => x.name.localeCompare(y.name));
+  window._logoLibraryItems = out;
   return out;
 }
 
@@ -1218,12 +1267,13 @@ function setLogoPickerTab(tab) {
 
 function renderLogoLibraryGridHtml(library, query) {
   const lq = (query || '').trim().toLowerCase();
+  const indexed = library.map((it, idx) => ({ it, idx }));
   const filteredLib = lq
-    ? library.filter(it => `${it.name} ${it.fileName} ${it.source}`.toLowerCase().includes(lq))
-    : library;
+    ? indexed.filter(({ it }) => `${it.name} ${it.fileName} ${it.source}`.toLowerCase().includes(lq))
+    : indexed;
   return filteredLib.length
-    ? `<div class="logo-grid">${filteredLib.map(it =>
-        `<button class="logo-tile" title="${esc(it.name)}${it.source ? ' · ' + esc(it.source) : ''}" onclick="applyLibraryLogo('${it.id}')">
+    ? `<div class="logo-grid">${filteredLib.map(({ it, idx }) =>
+        `<button class="logo-tile" title="${esc(it.name)}${it.source ? ' · ' + esc(it.source) : ''}" onclick="applyLibraryLogo(${idx})">
           <img src="${it.dataUrl}" alt="">
           <span>${esc(it.name)}</span>
         </button>`
@@ -1237,12 +1287,12 @@ function onLogoLibFilter(val) {
   if (host) host.innerHTML = renderLogoLibraryGridHtml(getAppLogoLibrary(), val);
 }
 
-function applyLibraryLogo(sourceAppId) {
+function applyLibraryLogo(libIdx) {
   const target = state.apps.find(x => x.id === state.selectedAppId);
-  const src = state.apps.find(x => x.id === sourceAppId);
-  if (!target || !src || !src.iconDataUrl) return;
-  showToast(`Applied ${src.name || src.fileName} logo`);
-  send('applyDataUrlLogo', { id: target.id, dataUrl: src.iconDataUrl });
+  const src = (window._logoLibraryItems || [])[libIdx];
+  if (!target || !src || !src.dataUrl) return;
+  showToast(`Applied ${src.name} logo`);
+  send('applyDataUrlLogo', { id: target.id, dataUrl: src.dataUrl });
 }
 
 function searchOnlineLogos(query) {
@@ -1770,15 +1820,17 @@ function renderInspector() {
   const panel = document.getElementById('inspector');
   const backdrop = document.getElementById('inspectorBackdrop');
   const a = state.apps.find(x => x.id === state.selectedAppId);
+  clearTimeout(renderInspector._clearTimer);
   if (!a) {
     panel.classList.remove('open');
     backdrop.classList.remove('open');
-    panel.innerHTML = '';
+    renderInspector._clearTimer = setTimeout(() => {
+      if (!state.selectedAppId) panel.innerHTML = '';
+    }, 260);
     return;
   }
 
-  panel.classList.add('open');
-  backdrop.classList.add('open');
+  const wasOpen = panel.classList.contains('open');
 
   const statusPill = a.status === 'allowed'
     ? `<span class="pill pill-green">Allowed Internet</span>`
@@ -1925,6 +1977,18 @@ function renderInspector() {
       ${!a.isSystem ? `<button class="btn btn-sm ${!a.exists ? 'btn-red' : ''}" onclick="deleteApps(['${a.id}'])">${!a.exists ? 'Remove Missing App from List' : 'Remove from List'}</button>` : ''}
     </div>
   `;
+
+  if (!wasOpen) {
+    requestAnimationFrame(() => {
+      if (state.selectedAppId) {
+        panel.classList.add('open');
+        backdrop.classList.add('open');
+      }
+    });
+  } else {
+    panel.classList.add('open');
+    backdrop.classList.add('open');
+  }
 }
 
 function renderDiagnose() {
@@ -2106,6 +2170,7 @@ if (window.chrome && window.chrome.webview) {
       }
       if (msg.theme) applyThemeUI(msg.theme);
       if (Array.isArray(msg.apps)) state.apps = msg.apps;
+      if (Array.isArray(msg.savedLogos)) state.savedLogos = msg.savedLogos;
       if (Array.isArray(msg.activity)) state.activity = msg.activity;
       renderChrome();
       renderPage();

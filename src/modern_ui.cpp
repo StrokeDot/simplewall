@@ -1124,6 +1124,134 @@ std::wstring MimeTypeForExt (const std::wstring &ext)
 	return L"image/png";
 }
 
+std::wstring GetSavedLibraryDir ()
+{
+	std::wstring base = GetCustomLogosDir ();
+	if (base.empty ()) return {};
+	std::wstring dir = base + L"\\library";
+	SHCreateDirectoryExW (nullptr, dir.c_str (), nullptr);
+	return dir;
+}
+
+struct SavedLibraryLogo
+{
+	std::wstring name;
+	std::wstring dataUrl;
+};
+
+std::mutex g_savedLibMutex;
+bool g_savedLibDirty = true;
+std::vector<SavedLibraryLogo> g_savedLibCache;
+
+std::wstring SanitizeLogoFileStem (const std::wstring &raw)
+{
+	std::wstring out;
+	out.reserve (raw.size ());
+	for (wchar_t c : raw)
+	{
+		if (iswalnum (c) || c == L'-' || c == L'_' || c == L' ')
+			out.push_back (c);
+	}
+	while (!out.empty () && out.front () == L' ') out.erase (out.begin ());
+	while (!out.empty () && out.back () == L' ') out.pop_back ();
+	if (out.size () > 48) out.resize (48);
+	if (out.empty ()) out = L"custom_logo";
+	return out;
+}
+
+void SaveToLogoLibrary (const std::wstring &label, const std::wstring &ext, const BYTE *data, size_t len)
+{
+	if (!data || len == 0 || len > 2 * 1024 * 1024)
+		return;
+
+	std::wstring dir = GetSavedLibraryDir ();
+	if (dir.empty ()) return;
+
+	std::wstring normExt = ToLower (ext);
+	if (normExt == L"jpeg") normExt = L"jpg";
+	if (normExt != L"png" && normExt != L"webp" && normExt != L"svg" && normExt != L"jpg")
+		normExt = L"png";
+
+	std::wstring stem = SanitizeLogoFileStem (label);
+	std::wstring fp = dir + L"\\" + stem + L"." + normExt;
+
+	HANDLE h = CreateFileW (fp.c_str (), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (h != INVALID_HANDLE_VALUE)
+	{
+		DWORD written = 0;
+		WriteFile (h, data, (DWORD)len, &written, nullptr);
+		CloseHandle (h);
+		std::lock_guard<std::mutex> lock (g_savedLibMutex);
+		g_savedLibDirty = true;
+	}
+}
+
+std::wstring BuildSavedLibraryJson ()
+{
+	{
+		std::lock_guard<std::mutex> lock (g_savedLibMutex);
+		if (g_savedLibDirty)
+		{
+			g_savedLibCache.clear ();
+			std::wstring dir = GetSavedLibraryDir ();
+			if (!dir.empty ())
+			{
+				WIN32_FIND_DATAW fd = {};
+				HANDLE hFind = FindFirstFileW ((dir + L"\\*.*").c_str (), &fd);
+				if (hFind != INVALID_HANDLE_VALUE)
+				{
+					do
+					{
+						if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+							continue;
+						std::wstring fn (fd.cFileName);
+						size_t dot = fn.find_last_of (L'.');
+						if (dot == std::wstring::npos || dot == 0) continue;
+						std::wstring ext = ToLower (fn.substr (dot + 1));
+						if (ext != L"png" && ext != L"webp" && ext != L"svg" && ext != L"jpg" && ext != L"jpeg")
+							continue;
+
+						std::wstring fp = dir + L"\\" + fn;
+						HANDLE h = CreateFileW (fp.c_str (), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+						if (h != INVALID_HANDLE_VALUE)
+						{
+							LARGE_INTEGER sz = {};
+							if (GetFileSizeEx (h, &sz) && sz.QuadPart > 0 && sz.QuadPart <= 2 * 1024 * 1024)
+							{
+								std::vector<BYTE> buf ((size_t)sz.QuadPart);
+								DWORD rd = 0;
+								if (ReadFile (h, buf.data (), (DWORD)buf.size (), &rd, nullptr) && rd > 0)
+								{
+									SavedLibraryLogo item;
+									item.name = fn.substr (0, dot);
+									item.dataUrl = L"data:" + MimeTypeForExt (ext) + L";base64," + Base64Encode (buf.data (), rd);
+									g_savedLibCache.push_back (std::move (item));
+								}
+							}
+							CloseHandle (h);
+						}
+						if (g_savedLibCache.size () >= 120) break;
+					} while (FindNextFileW (hFind, &fd));
+					FindClose (hFind);
+				}
+			}
+			g_savedLibDirty = false;
+		}
+	}
+
+	std::wostringstream ss;
+	ss << L"[";
+	std::lock_guard<std::mutex> lock (g_savedLibMutex);
+	for (size_t i = 0; i < g_savedLibCache.size (); ++i)
+	{
+		if (i > 0) ss << L",";
+		ss << L"{\"name\":\"" << JsonEscape (g_savedLibCache[i].name)
+			<< L"\",\"dataUrl\":\"" << JsonEscape (g_savedLibCache[i].dataUrl) << L"\"}";
+	}
+	ss << L"]";
+	return ss.str ();
+}
+
 std::wstring GetCustomLogoDataUrl (ULONG_PTR appHash, bool *outHasCustom = nullptr)
 {
 	if (outHasCustom) *outHasCustom = false;
@@ -1671,7 +1799,7 @@ std::wstring BuildFullSnapshotJson ()
 	if (!pendingMeta.empty ())
 		StartMetaEnrichmentAsync (std::move (pendingMeta));
 
-	ss << L"],\"activity\":" << BuildActivityArrayJson () << L"}";
+	ss << L"],\"savedLogos\":" << BuildSavedLibraryJson () << L",\"activity\":" << BuildActivityArrayJson () << L"}";
 	return ss.str ();
 }
 
@@ -2722,6 +2850,7 @@ void RunApplyOnlineLogoAsync (ULONG_PTR appHash, std::wstring slug)
 		if (FetchOnlineLogoPngBytes (slug, png) &&
 			SaveCustomLogoBytes (appHash, L"png", reinterpret_cast<const BYTE *>(png.data ()), png.size ()))
 		{
+			SaveToLogoLibrary (slug, L"png", reinterpret_cast<const BYTE *>(png.data ()), png.size ());
 			WriteAuditLogLine (L"LOGO", L"Applied HD online logo: " + slug);
 			PostAsyncJsonFromWorker (L"{\"type\":\"logoApplied\",\"ok\":true,\"slug\":\"" + JsonEscape (slug) + L"\"}");
 		}
@@ -2750,8 +2879,11 @@ void PickCustomLogoFile (ULONG_PTR appHash)
 		return;
 
 	std::wstring chosen (fileBuf);
+	std::wstring chosenFile = ExtractFileName (chosen);
 	size_t dot = chosen.find_last_of (L'.');
 	std::wstring ext = (dot == std::wstring::npos) ? L"png" : ToLower (chosen.substr (dot + 1));
+	size_t fnDot = chosenFile.find_last_of (L'.');
+	std::wstring stemName = (fnDot == std::wstring::npos) ? chosenFile : chosenFile.substr (0, fnDot);
 
 	if (ext == L"ico")
 	{
@@ -2785,6 +2917,7 @@ void PickCustomLogoFile (ULONG_PTR appHash)
 					const BYTE *ptr = (const BYTE *)GlobalLock (hMem);
 					if (ptr && sz > 0)
 					{
+						SaveToLogoLibrary (stemName, L"png", ptr, sz);
 						SaveCustomLogoBytes (appHash, L"png", ptr, sz);
 						GlobalUnlock (hMem);
 					}
@@ -2811,6 +2944,7 @@ void PickCustomLogoFile (ULONG_PTR appHash)
 		DWORD rd = 0;
 		if (ReadFile (h, buf.data (), (DWORD)buf.size (), &rd, nullptr) && rd > 0)
 		{
+			SaveToLogoLibrary (stemName, ext, buf.data (), rd);
 			SaveCustomLogoBytes (appHash, ext, buf.data (), rd);
 		}
 	}
