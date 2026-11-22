@@ -10,5 +10,5 @@
 #define APP_FORK_OWNER L"StrokeDot"
 #define APP_FORK_REPO L"simplewall"
 #define APP_FORK_VERSION L"4.0.0"
-#define APP_AUTHOR L"Henry++ (Personal Fork: StrokeDot)"
-#define APP_COPYRIGHT L"(c) 2016-2026 Henry++ / Personal Fork."
+#define APP_AUTHOR L"Henry++"
+#define APP_COPYRIGHT L"(c) 2016-2026 Henry++. Personal Fork: StrokeDot."
