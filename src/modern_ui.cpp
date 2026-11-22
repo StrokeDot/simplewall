@@ -850,6 +850,39 @@ FileMeta GetFileMeta (const std::wstring &path, bool exists)
 	return meta;
 }
 
+std::atomic<bool> g_metaEnrichRunning{false};
+
+bool TryGetCachedMeta (const std::wstring &path, FileMeta &outMeta)
+{
+	std::wstring key = ToLower (path);
+	std::lock_guard<std::mutex> lock (g_metaMutex);
+	auto it = g_metaCache.find (key);
+	if (it != g_metaCache.end ())
+	{
+		outMeta = it->second;
+		return true;
+	}
+	return false;
+}
+
+void StartMetaEnrichmentAsync (std::vector<std::pair<std::wstring, bool>> pending)
+{
+	if (pending.empty () || g_metaEnrichRunning.exchange (true))
+		return;
+
+	std::thread ([pending = std::move (pending)] () {
+		CoInitializeEx (nullptr, COINIT_APARTMENTTHREADED);
+		for (const auto &p : pending)
+		{
+			if (!g_active.load ()) break;
+			GetFileMeta (p.first, p.second);
+		}
+		CoUninitialize ();
+		g_metaEnrichRunning.store (false);
+		_modern_ui_notify_change ();
+	}).detach ();
+}
+
 // ---- Build JSON snapshots ----
 
 std::wstring BuildActivityArrayJson ()
@@ -910,6 +943,7 @@ std::wstring BuildFullSnapshotJson ()
 		<< L",\"allowIpv6\":" << (st.allow_ipv6 ? L"true" : L"false")
 		<< L"},\"apps\":[";
 
+	std::vector<std::pair<std::wstring, bool>> pendingMeta;
 	bool first = true;
 	for (SIZE_T i = 0; i < appCount; ++i)
 	{
@@ -920,11 +954,16 @@ std::wstring BuildFullSnapshotJson ()
 		std::wstring fileName = ExtractFileName (path);
 		bool isRun = !path.empty () && (running.find (ToLower (path)) != running.end ());
 
-		// Only fetch full metadata/icon for regular apps, allowed apps, or explicitly blocked apps to keep UI snappy
+		// Instant non-blocking lookup: never stall the UI thread on icons/catalog signatures!
 		FileMeta meta;
 		if (a.category == 0 || a.is_enabled || a.is_silent || a.is_blocked)
 		{
-			meta = GetFileMeta (path, a.exists != FALSE);
+			if (!TryGetCachedMeta (path, meta))
+			{
+				meta.parentApp = InferParentApp (path);
+				if (!path.empty () && pendingMeta.size () < 200)
+					pendingMeta.emplace_back (path, a.exists != FALSE);
+			}
 		}
 		else
 		{
@@ -967,6 +1006,9 @@ std::wstring BuildFullSnapshotJson ()
 	}
 
 	_modern_bridge_free_apps (apps);
+
+	if (!pendingMeta.empty ())
+		StartMetaEnrichmentAsync (std::move (pendingMeta));
 
 	ss << L"],\"activity\":" << BuildActivityArrayJson () << L"}";
 	return ss.str ();
@@ -1360,8 +1402,12 @@ bool WinHttpGetToBytesOnce (const std::wstring &url, DWORD accessType, std::stri
 		return false;
 	}
 
-	// Keep resolveTimeout = 0 so Windows DNS fallback never aborts prematurely on dual-stack/VPN networks
-	WinHttpSetTimeouts (hSession, 0, 12000, 15000, 30000);
+	// Enable Windows 10/11 Happy Eyeballs (IPv6 fast fallback to IPv4 in ~200ms instead of 21s SYN hang!)
+	BOOL fastFallback = TRUE;
+	WinHttpSetOption (hSession, WINHTTP_OPTION_IPV6_FAST_FALLBACK, &fastFallback, sizeof (fastFallback));
+
+	// Keep resolveTimeout = 0 so DNS never aborts prematurely; snappy 5s connect timeout with Happy Eyeballs
+	WinHttpSetTimeouts (hSession, 0, 5000, 10000, 20000);
 
 	DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
 	WinHttpSetOption (hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof (redirectPolicy));
@@ -1444,20 +1490,110 @@ bool WinHttpGetToBytesOnce (const std::wstring &url, DWORD accessType, std::stri
 	return ok;
 }
 
+bool CurlIpv4Fallback (const std::wstring &url, std::string &outBody, DWORD &outStatus, bool isBinaryDownload)
+{
+	outBody.clear ();
+	outStatus = 0;
+
+	WCHAR tempDir[MAX_PATH] = {};
+	GetTempPathW (MAX_PATH, tempDir);
+	std::wstring outPath = std::wstring (tempDir) + (isBinaryDownload ? L"sw_curl_dl.bin" : L"sw_curl_api.json");
+	DeleteFileW (outPath.c_str ());
+
+	std::wstring cmd = L"\"C:\\Windows\\System32\\curl.exe\" -4 -sSL --connect-timeout 6 --max-time 25 "
+		L"-H \"User-Agent: SimpleWall/" APP_FORK_VERSION L"\" "
+		+ std::wstring (isBinaryDownload ? L"" : L"-H \"Accept: application/vnd.github+json\" ")
+		+ L"-o \"" + outPath + L"\" -w \"%{http_code}\" \"" + url + L"\"";
+
+	SECURITY_ATTRIBUTES sa = {};
+	sa.nLength = sizeof (sa);
+	sa.bInheritHandle = TRUE;
+
+	HANDLE hRead = nullptr, hWrite = nullptr;
+	if (!CreatePipe (&hRead, &hWrite, &sa, 0))
+		return false;
+	SetHandleInformation (hRead, HANDLE_FLAG_INHERIT, 0);
+
+	STARTUPINFOW si = {};
+	si.cb = sizeof (si);
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdOutput = hWrite;
+	si.hStdError = hWrite;
+
+	PROCESS_INFORMATION pi = {};
+	bool launched = CreateProcessW (nullptr, cmd.data (), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi) != FALSE;
+	CloseHandle (hWrite);
+
+	std::string statusStr;
+	if (launched)
+	{
+		char buf[64];
+		DWORD r = 0;
+		while (ReadFile (hRead, buf, sizeof (buf), &r, nullptr) && r > 0)
+			statusStr.append (buf, r);
+
+		WaitForSingleObject (pi.hProcess, 25000);
+		CloseHandle (pi.hThread);
+		CloseHandle (pi.hProcess);
+	}
+	CloseHandle (hRead);
+
+	if (!launched || statusStr.empty ())
+	{
+		DeleteFileW (outPath.c_str ());
+		return false;
+	}
+
+	outStatus = (DWORD)strtoul (statusStr.c_str (), nullptr, 10);
+
+	HANDLE hFile = CreateFileW (outPath.c_str (), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (hFile != INVALID_HANDLE_VALUE)
+	{
+		LARGE_INTEGER sz = {};
+		if (GetFileSizeEx (hFile, &sz) && sz.QuadPart > 0 && sz.QuadPart < 64 * 1024 * 1024)
+		{
+			outBody.resize ((size_t)sz.QuadPart);
+			DWORD total = 0, rd = 0;
+			while (total < outBody.size () && ReadFile (hFile, outBody.data () + total, (DWORD)(outBody.size () - total), &rd, nullptr) && rd > 0)
+				total += rd;
+			outBody.resize (total);
+		}
+		CloseHandle (hFile);
+	}
+	DeleteFileW (outPath.c_str ());
+	return outStatus > 0;
+}
+
 bool WinHttpGetToBytes (const std::wstring &url, std::string &outBody, DWORD &outStatus, bool isBinaryDownload = false)
 {
+	DWORD t0 = GetTickCount ();
 	DWORD err = 0;
-	// Try fast direct connection first (no WPAD delay)
-	if (WinHttpGetToBytesOnce (url, WINHTTP_ACCESS_TYPE_NO_PROXY, outBody, outStatus, err, isBinaryDownload))
-		return true;
 
-	// Fallback to system automatic proxy if direct failed
+	// Tier 1: Fast direct WinHTTP with IPv6 Happy Eyeballs fast-fallback
+	if (WinHttpGetToBytesOnce (url, WINHTTP_ACCESS_TYPE_NO_PROXY, outBody, outStatus, err, isBinaryDownload))
+	{
+		WCHAR logBuf[160];
+		swprintf_s (logBuf, L"Updater WinHTTP OK (HTTP %lu in %lu ms)", outStatus, GetTickCount () - t0);
+		WriteAuditLogLine (L"UPDATE", logBuf);
+		return true;
+	}
+
+	// Tier 2: Pure IPv4 fallback via Windows built-in curl.exe -4 (bypasses dead NAT64 IPv6 immediately!)
+	if (CurlIpv4Fallback (url, outBody, outStatus, isBinaryDownload))
+	{
+		WCHAR logBuf[180];
+		swprintf_s (logBuf, L"Updater IPv4 fallback OK (HTTP %lu in %lu ms, winhttp err=%lu)", outStatus, GetTickCount () - t0, err);
+		WriteAuditLogLine (L"UPDATE", logBuf);
+		return true;
+	}
+
+	// Tier 3: WinHTTP with automatic proxy
 	DWORD err2 = 0;
 	if (WinHttpGetToBytesOnce (url, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, outBody, outStatus, err2, isBinaryDownload))
 		return true;
 
 	WCHAR logBuf[256];
-	swprintf_s (logBuf, L"WinHTTP request failed (direct err=%lu, proxy err=%lu)", err, err2);
+	swprintf_s (logBuf, L"Updater failed after %lu ms (direct err=%lu, proxy err=%lu)", GetTickCount () - t0, err, err2);
 	WriteAuditLogLine (L"UPDATE", logBuf);
 	return false;
 }
@@ -1785,6 +1921,34 @@ void HandleWebMessage (const std::wstring &json)
 
 // ---- Load embedded HTML resource ----
 
+std::wstring GetEmbeddedFontStyleTag ()
+{
+	static std::wstring cached;
+	static bool loaded = false;
+	if (!loaded)
+	{
+		loaded = true;
+		HMODULE hMod = GetModuleHandleW (nullptr);
+		HRSRC hRes = FindResourceW (hMod, MAKEINTRESOURCEW (IDR_MODERN_FONT), RT_RCDATA);
+		if (hRes)
+		{
+			HGLOBAL hData = LoadResource (hMod, hRes);
+			if (hData)
+			{
+				DWORD sz = SizeofResource (hMod, hRes);
+				const BYTE *ptr = (const BYTE *)LockResource (hData);
+				if (ptr && sz > 0)
+				{
+					cached = L"<style>@font-face{font-family:'Google Sans Flex';src:url(data:font/woff2;base64,"
+						+ Base64Encode (ptr, sz)
+						+ L") format('woff2');font-weight:400 700;font-style:normal;font-display:swap;}</style>";
+				}
+			}
+		}
+	}
+	return cached;
+}
+
 std::wstring LoadEmbeddedResourceHtml (UINT resId)
 {
 	HMODULE hMod = GetModuleHandleW (nullptr);
@@ -1795,7 +1959,15 @@ std::wstring LoadEmbeddedResourceHtml (UINT resId)
 	DWORD sz = SizeofResource (hMod, hRes);
 	const char *ptr = (const char *)LockResource (hData);
 	if (!ptr || sz == 0) return {};
-	return Utf8ToWide (std::string (ptr, sz));
+	std::wstring html = Utf8ToWide (std::string (ptr, sz));
+	std::wstring fontTag = GetEmbeddedFontStyleTag ();
+	if (!fontTag.empty ())
+	{
+		size_t pos = html.find (L"</head>");
+		if (pos != std::wstring::npos)
+			html.insert (pos, fontTag);
+	}
+	return html;
 }
 
 // ---- Bottom-right animated alert popup helpers ----

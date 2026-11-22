@@ -6,7 +6,7 @@
 <title>SimpleWall</title>
 <style>
 :root {
-  --font: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font: 'Google Sans Flex', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --mono: 'Cascadia Mono', 'Consolas', monospace;
   --radius: 10px;
   --radius-sm: 7px;
@@ -110,8 +110,28 @@ html, body {
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
 }
 
-.brand-title { font-weight: 700; font-size: 14.5px; line-height: 1.2; }
-.brand-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.brand-title {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.35px;
+  line-height: 1.15;
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+.brand-title .wall-accent {
+  background: linear-gradient(135deg, #ff7a18, #ef4444);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.brand-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+  margin-top: 2px;
+  letter-spacing: 0.1px;
+}
 
 .nav-item {
   display: flex;
@@ -439,9 +459,17 @@ html, body {
   margin-bottom: 18px;
 }
 
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 @media (max-width: 980px) {
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-3 { grid-template-columns: 1fr; }
+  .grid-2 { grid-template-columns: 1fr; }
 }
 
 .card {
@@ -764,8 +792,8 @@ html, body {
     <div class="brand">
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
-        <div class="brand-title">SimpleWall</div>
-        <div class="brand-sub" id="sidebarVersion">v4.1.2</div>
+        <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.0</div>
       </div>
     </div>
 
@@ -1392,30 +1420,36 @@ function renderSettings() {
     <div class="page-header">
       <div>
         <div class="page-title">Settings & Updates</div>
-        <div class="page-sub">Customize appearance, alerts, protection rules, and updates.</div>
+        <div class="page-sub">Appearance, alerts, protection rules, and updates.</div>
       </div>
     </div>
 
-    <div class="card" style="margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <div style="font-weight:700;font-size:15px">Updater</div>
-        <button class="btn" onclick="checkForUpdates()" ${state.updateStatus==='checking'||state.updateStatus==='downloading'?'disabled':''}>Check Updates</button>
+    <div class="grid-2">
+      <div class="card" style="display:flex;flex-direction:column;justify-content:center">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div>
+            <div style="font-weight:700;font-size:14.5px">Updater</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:2px">v${esc(state.appVersion)}</div>
+          </div>
+          <button class="btn btn-sm btn-primary" onclick="checkForUpdates()" ${state.updateStatus==='checking'||state.updateStatus==='downloading'?'disabled':''}>Check Updates</button>
+        </div>
+        ${updateBody}
       </div>
-      ${updateBody}
-    </div>
 
-    <div class="card" style="margin-bottom:16px">
-      <div style="font-weight:700;font-size:15px;margin-bottom:4px">Appearance & Alerts</div>
-      <div class="setting-row">
+      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div>
-          <div class="setting-title">Color Theme</div>
-          <div class="setting-desc">Switch instantly between Dark Mode and Light Mode.</div>
+          <div style="font-weight:700;font-size:14.5px">Theme</div>
+          <div style="font-size:12px;color:var(--text-2);margin-top:2px">Switch Dark or Light mode</div>
         </div>
         <div class="segmented">
           <button class="${state.theme==='dark'?'active':''}" onclick="setTheme('dark')">Dark</button>
           <button class="${state.theme==='light'?'active':''}" onclick="setTheme('light')">Light</button>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px">Alerts</div>
       <div class="setting-row">
         <div>
           <div class="setting-title">Pop-up Alerts for Blocked Apps</div>

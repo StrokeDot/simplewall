@@ -853,10 +853,11 @@ IDI_INACTIVE		ICON		"res\\101.ico"
 //
 // Manifest resource
 //
-// Modern UI HTML resource
+// Modern UI HTML & Font resources
 //
 IDR_MODERN_UI	RCDATA		"ui\\index.html"
 IDR_MODERN_ALERT	RCDATA		"ui\\alert.html"
+IDR_MODERN_FONT	RCDATA		"ui\\google_sans_flex.woff2"
 
 //
 1			RT_MANIFEST		"res\\manifest.xml"

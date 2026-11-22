@@ -308,9 +308,10 @@
 #define IDM_SAFEPAUSE_1H 343
 #define IDM_SAFEPAUSE_INDEFINITE 344
 
-// Embedded Modern UI HTML
+// Embedded Modern UI HTML & Font
 #define IDR_MODERN_UI 900
 #define IDR_MODERN_ALERT 901
+#define IDR_MODERN_FONT 902
 
 #define IDX_LANGUAGE 1000
 #define IDX_TIMER 1200
