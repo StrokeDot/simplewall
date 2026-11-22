@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>simplewall Alert</title>
+<style>
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes spinGlow {
+  from { --angle: 0deg; }
+  to { --angle: 360deg; }
+}
+
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(8px) scale(0.97); }
+}
+
+@keyframes checkPop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+[data-theme="dark"] {
+  --card: #121824;
+  --surface: #182131;
+  --hover: #222e42;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #f1f5f9;
+  --text-2: #94a3b8;
+  --text-3: #64748b;
+  --green: #22c55e;
+  --green-soft: rgba(34, 197, 94, 0.16);
+  --red: #ef4444;
+  --red-soft: rgba(239, 68, 68, 0.16);
+  --amber: #f59e0b;
+  --amber-soft: rgba(245, 158, 11, 0.16);
+  --blue: #3b82f6;
+  --blue-soft: rgba(59, 130, 246, 0.16);
+}
+
+[data-theme="light"] {
+  --card: #ffffff;
+  --surface: #f4f7fb;
+  --hover: #e9eff7;
+  --border: rgba(15, 23, 42, 0.10);
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #64748b;
+  --green: #16a34a;
+  --green-soft: rgba(22, 163, 74, 0.13);
+  --red: #dc2626;
+  --red-soft: rgba(220, 38, 38, 0.13);
+  --amber: #d97706;
+  --amber-soft: rgba(217, 119, 6, 0.13);
+  --blue: #2563eb;
+  --blue-soft: rgba(37, 99, 235, 0.12);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--card);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Animated Glowing Corner Frame */
+.frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 2.5px;
+  background: conic-gradient(
+    from var(--angle),
+    rgba(239, 68, 68, 0.12) 0deg,
+    #ef4444 45deg,
+    #f97316 90deg,
+    rgba(239, 68, 68, 0.12) 150deg,
+    rgba(239, 68, 68, 0.12) 210deg,
+    #ef4444 270deg,
+    rgba(239, 68, 68, 0.12) 340deg
+  );
+  animation: spinGlow 3.2s linear infinite, popIn 180ms ease-out;
+  transition: background 220ms ease;
+}
+
+.frame.state-allowed {
+  background: conic-gradient(
+    from var(--angle),
+    rgba(34, 197, 94, 0.35) 0deg,
+    #22c55e 90deg,
+    #4ade80 180deg,
+    #22c55e 270deg,
+    rgba(34, 197, 94, 0.35) 360deg
+  );
+  animation: spinGlow 1.1s linear infinite;
+}
+
+.frame.state-blocked {
+  background: linear-gradient(135deg, #ef4444, #991b1b);
+  animation: none;
+}
+
+.frame.closing {
+  animation: fadeOut 240ms ease-in forwards;
+}
+
+.inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--card);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  padding: 13px 15px 14px;
+  gap: 10px;
+  overflow: hidden;
+}
+
+/* Top header */
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 10px var(--red);
+  transition: all 200ms ease;
+}
+.frame.state-allowed .status-dot {
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green);
+}
+
+.head-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: var(--red);
+}
+.frame.state-allowed .head-title { color: var(--green); }
+
+.queue-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+}
+
+.head-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mini-btn {
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  display: grid; place-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 140ms ease;
+}
+.mini-btn:hover { background: var(--hover); color: var(--text); border-color: var(--border); }
+
+/* App hero */
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.icon-box {
+  width: 42px; height: 42px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text-2);
+}
+.icon-box img { width: 30px; height: 30px; object-fit: contain; }
+
+.hero-text { flex: 1; min-width: 0; }
+.app-name {
+  font-size: 15.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-pub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.pill-green { background: var(--green-soft); color: var(--green); }
+.pill-amber { background: var(--amber-soft); color: var(--amber); }
+
+/* Details card */
+.details {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 11px;
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  row-gap: 4px;
+  column-gap: 8px;
+  font-size: 12px;
+}
+.d-label { color: var(--text-3); font-weight: 500; }
+.d-val {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.d-val.mono { font-family: 'Cascadia Mono', Consolas, monospace; font-size: 11.5px; color: var(--text-2); }
+
+/* Actions */
+.actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 140ms ease;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--hover); }
+.btn-allow {
+  flex: 1.25;
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.btn-allow:hover { filter: brightness(1.08); background: var(--green); }
+.btn-reopen {
+  flex: 1.1;
+  background: var(--blue-soft);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: var(--blue);
+}
+.btn-reopen:hover { background: var(--blue); color: #fff; }
+.btn-block {
+  flex: 0.95;
+  background: var(--red-soft);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: var(--red);
+}
+.btn-block:hover { background: var(--red); color: #fff; }
+.btn-xs {
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+/* Confirmation overlay */
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(12, 18, 28, 0.88);
+  backdrop-filter: blur(4px);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 20;
+}
+[data-theme="light"] .overlay { background: rgba(255, 255, 255, 0.90); }
+.overlay.show { display: flex; }
+
+.overlay-circle {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 26px;
+  font-weight: 700;
+  animation: checkPop 240ms ease-out;
+}
+.overlay-circle.ok { background: var(--green-soft); color: var(--green); border: 2px solid var(--green); }
+.overlay-circle.no { background: var(--red-soft); color: var(--red); border: 2px solid var(--red); }
+.overlay-text { font-size: 15px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="frame" id="frame">
+  <div class="inner">
+    <div class="head">
+      <div class="head-left">
+        <span class="status-dot"></span>
+        <span class="head-title" id="headTitle">Connection Blocked</span>
+        <span class="queue-pill" id="queuePill" style="display:none">1 of 1</span>
+      </div>
+      <div class="head-btns">
+        <button class="mini-btn" id="btnMute" title="Toggle alert sound" onclick="toggleSound()">🔇</button>
+        <button class="mini-btn" id="btnNext" title="Next alert" style="display:none" onclick="send('next')">▶</button>
+        <button class="mini-btn" title="Dismiss" onclick="dismissAlert()">✕</button>
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="icon-box" id="appIcon">?</div>
+      <div class="hero-text">
+        <div class="app-name" id="appName">Loading...</div>
+        <div class="app-pub">
+          <span id="appPub">Unknown publisher</span>
+          <span class="pill" id="sigPill"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="details">
+      <div class="d-label">From</div>
+      <div class="d-val" id="dOrigin">—</div>
+      <div class="d-label">Destination</div>
+      <div class="d-val mono" id="dDest">—</div>
+      <div class="d-label">What it is</div>
+      <div class="d-val" id="dDesc">—</div>
+    </div>
+
+    <div class="actions">
+      <div class="btn-row">
+        <button class="btn btn-allow" onclick="decide('allow', 0, false)">✓ Allow</button>
+        <button class="btn btn-reopen" id="btnReopen" onclick="decide('allow', 0, true)" title="Allow internet and restart this app so it connects right away">↻ Allow & Reopen</button>
+        <button class="btn btn-block" onclick="decide('block', 0, false)">✕ Block</button>
+      </div>
+      <div class="btn-row" style="justify-content:space-between">
+        <div style="display:flex;gap:5px;align-items:center">
+          <span style="font-size:11px;color:var(--text-3)">Temp allow:</span>
+          <button class="btn btn-xs" onclick="decide('allow', 600, false)">10m</button>
+          <button class="btn btn-xs" onclick="decide('allow', 1800, false)">30m</button>
+          <button class="btn btn-xs" onclick="decide('allow', 3600, false)">1h</button>
+        </div>
+        <button class="btn btn-xs" onclick="send('openFolder', { path: currentAlert ? currentAlert.path : '' })">Open Folder</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="overlay">
+      <div class="overlay-circle ok" id="overlayIcon">✓</div>
+      <div class="overlay-text" id="overlayText">Allowed!</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentAlert = null;
+let busy = false;
+
+function send(action, payload = {}) {
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.postMessage(JSON.stringify({ action, ...payload }));
+  }
+}
+
+function toggleSound() {
+  if (!currentAlert) return;
+  const next = !currentAlert.soundEnabled;
+  currentAlert.soundEnabled = next;
+  updateMuteBtn(next);
+  send('toggleSound', { enabled: next });
+}
+
+function updateMuteBtn(enabled) {
+  const b = document.getElementById('btnMute');
+  b.textContent = enabled ? '🔔' : '🔇';
+  b.title = enabled ? 'Alert sound ON (click to mute)' : 'Alert sound muted (click to enable)';
+}
+
+function decide(decision, durationSeconds, reopen) {
+  if (!currentAlert || busy) return;
+  busy = true;
+
+  const frame = document.getElementById('frame');
+  const overlay = document.getElementById('overlay');
+  const oIcon = document.getElementById('overlayIcon');
+  const oText = document.getElementById('overlayText');
+
+  if (decision === 'allow') {
+    frame.classList.add('state-allowed');
+    document.getElementById('headTitle').textContent = 'Connection Allowed';
+    oIcon.className = 'overlay-circle ok';
+    oIcon.textContent = '✓';
+    oText.textContent = reopen ? 'Allowed & Reopening...' : (durationSeconds ? `Allowed for ${Math.round(durationSeconds/60)}m` : 'Allowed!');
+    overlay.classList.add('show');
+    send('decide', { id: currentAlert.id, decision: 'allow', durationSeconds, reopen });
+  } else {
+    frame.classList.add('state-blocked');
+    oIcon.className = 'overlay-circle no';
+    oIcon.textContent = '✕';
+    oText.textContent = 'Blocked Permanently';
+    overlay.classList.add('show');
+    send('decide', { id: currentAlert.id, decision: 'block', durationSeconds: 0, reopen: false });
+  }
+
+  setTimeout(() => {
+    frame.classList.add('closing');
+    setTimeout(() => {
+      send('animDone', { id: currentAlert ? currentAlert.id : '' });
+    }, 220);
+  }, 460);
+}
+
+function dismissAlert() {
+  if (busy) return;
+  busy = true;
+  document.getElementById('frame').classList.add('closing');
+  setTimeout(() => send('dismiss', { id: currentAlert ? currentAlert.id : '' }), 200);
+}
+
+function renderAlert(a) {
+  currentAlert = a;
+  busy = false;
+
+  document.documentElement.setAttribute('data-theme', a.theme === 'light' ? 'light' : 'dark');
+
+  const frame = document.getElementById('frame');
+  frame.className = 'frame';
+  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('headTitle').textContent = 'Connection Blocked';
+
+  const iconEl = document.getElementById('appIcon');
+  if (a.iconDataUrl) {
+    iconEl.innerHTML = `<img src="${a.iconDataUrl}" alt="">`;
+  } else {
+    iconEl.textContent = (a.name || '?').trim().charAt(0).toUpperCase() || '?';
+  }
+
+  document.getElementById('appName').textContent = a.name || a.fileName || 'Unknown App';
+  document.getElementById('appPub').textContent = a.company || a.signature || 'Unknown publisher';
+
+  const sigPill = document.getElementById('sigPill');
+  if (a.signature) {
+    sigPill.className = 'pill pill-green';
+    sigPill.textContent = 'Verified';
+    sigPill.style.display = '';
+  } else {
+    sigPill.className = 'pill pill-amber';
+    sigPill.textContent = 'Unsigned';
+    sigPill.style.display = '';
+  }
+
+  document.getElementById('dOrigin').textContent = a.parentApp || a.path || 'Unknown';
+  const dest = (a.remoteAddr || 'Unknown') + (a.remotePort ? `:${a.remotePort}` : '') + (a.protocol ? ` (${a.protocol})` : '');
+  document.getElementById('dDest').textContent = dest;
+  document.getElementById('dDesc').textContent = a.description || a.fileName || 'Desktop application';
+
+  const btnReopen = document.getElementById('btnReopen');
+  btnReopen.style.display = a.canReopen ? '' : 'none';
+
+  const qPill = document.getElementById('queuePill');
+  const btnNext = document.getElementById('btnNext');
+  if (a.queueCount > 1) {
+    qPill.textContent = `${a.queueCount} waiting`;
+    qPill.style.display = '';
+    btnNext.style.display = '';
+  } else {
+    qPill.style.display = 'none';
+    btnNext.style.display = 'none';
+  }
+
+  updateMuteBtn(!!a.soundEnabled);
+}
+
+if (window.chrome && window.chrome.webview) {
+  window.chrome.webview.addEventListener('message', event => {
+    const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+    if (msg && msg.type === 'showAlert') {
+      renderAlert(msg);
+    }
+  });
+}
+
+send('alertReady');
+</script>
+</body>
+</html>

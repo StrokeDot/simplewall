@@ -856,6 +856,7 @@ IDI_INACTIVE		ICON		"res\\101.ico"
 // Modern UI HTML resource
 //
 IDR_MODERN_UI	RCDATA		"ui\\index.html"
+IDR_MODERN_ALERT	RCDATA		"ui\\alert.html"
 
 //
 1			RT_MANIFEST		"res\\manifest.xml"

@@ -147,6 +147,33 @@ VOID _modern_bridge_request_exit (
 	_In_ HWND hwnd
 );
 
+BOOLEAN _modern_alert_isready (
+	VOID
+);
+
+BOOLEAN _modern_alert_enqueue (
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR name,
+	_In_opt_ LPCWSTR path,
+	_In_opt_ LPCWSTR signature,
+	_In_opt_ LPCWSTR remote_addr,
+	_In_ UINT16 remote_port,
+	_In_opt_ LPCWSTR protocol,
+	_In_ BOOLEAN can_reopen
+);
+
+VOID _modern_bridge_notify_decision (
+	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash,
+	_In_ BOOLEAN is_allow,
+	_In_ LONG64 duration_seconds,
+	_In_ BOOLEAN reopen_app
+);
+
+VOID _modern_bridge_notify_dismiss (
+	_In_ ULONG_PTR app_hash
+);
+
 #ifdef __cplusplus
 }
 #endif

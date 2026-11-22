@@ -310,6 +310,7 @@
 
 // Embedded Modern UI HTML
 #define IDR_MODERN_UI 900
+#define IDR_MODERN_ALERT 901
 
 #define IDX_LANGUAGE 1000
 #define IDX_TIMER 1200

@@ -35,7 +35,7 @@ VOID _modern_bridge_get_state (
 	out_state->is_applying = _wfp_isfiltersapplying ();
 	out_state->is_dark_theme = _r_config_getboolean (L"ModernDarkTheme", TRUE);
 	out_state->notifications = _r_config_getboolean (L"IsNotificationsEnabled", TRUE);
-	out_state->sound = _r_config_getboolean (L"IsNotificationsSound", TRUE);
+	out_state->sound = _r_config_getboolean (L"IsNotificationsSound", FALSE);
 	out_state->block_inbound = _r_config_getboolean (L"BlockInboundConnections", TRUE);
 	out_state->stealth_mode = _r_config_getboolean (L"UseStealthMode", TRUE);
 	out_state->allow_loopback = _r_config_getboolean (L"AllowLoopbackConnections", TRUE);
@@ -451,4 +451,176 @@ VOID _modern_bridge_push_activity (
 
 	if (app_name)
 		_r_obj_dereference (app_name);
+}
+
+BOOLEAN _modern_bridge_show_alert (
+	_In_ HWND hwnd,
+	_In_ PITEM_LOG ptr_log
+)
+{
+	PITEM_APP ptr_app;
+	PITEM_APP_INFO ptr_info;
+	PR_STRING app_name = NULL;
+	LPCWSTR path_str = NULL;
+	LPCWSTR sig_str = NULL;
+	LPCWSTR remote_str = NULL;
+	LPCWSTR proto_str = NULL;
+	BOOLEAN can_reopen = FALSE;
+	BOOLEAN ok;
+
+	UNREFERENCED_PARAMETER (hwnd);
+
+	if (!ptr_log || !_modern_alert_isready ())
+		return FALSE;
+
+	ptr_app = _app_getappitem (ptr_log->app_hash);
+
+	if (!ptr_app)
+		return FALSE;
+
+	app_name = _app_getappdisplayname (ptr_app, TRUE);
+
+	if (ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path))
+		path_str = ptr_app->real_path->buffer;
+	else if (ptr_log->path && !_r_obj_isstringempty (ptr_log->path))
+		path_str = ptr_log->path->buffer;
+
+	ptr_info = _app_getappinfobyhash2 (ptr_app->app_hash);
+
+	if (ptr_info && ptr_info->signature_info && !_r_obj_isstringempty (ptr_info->signature_info))
+		sig_str = ptr_info->signature_info->buffer;
+
+	if (ptr_log->remote_addr_str && !_r_obj_isstringempty (ptr_log->remote_addr_str))
+		remote_str = ptr_log->remote_addr_str->buffer;
+
+	if (ptr_log->protocol_str && !_r_obj_isstringempty (ptr_log->protocol_str))
+		proto_str = ptr_log->protocol_str->buffer;
+
+	// Allow & Reopen is offered for regular installed non-system desktop .exe apps
+	if (ptr_app->type == DATA_APP_REGULAR &&
+		!_app_isdisabledremoval (ptr_app->app_hash) &&
+		!_app_isappfromsystem (ptr_app->real_path, ptr_app->app_hash) &&
+		_app_isappexists (ptr_app) &&
+		path_str && path_str[0])
+	{
+		can_reopen = TRUE;
+	}
+
+	ok = _modern_alert_enqueue (
+		ptr_app->app_hash,
+		app_name ? app_name->buffer : NULL,
+		path_str,
+		sig_str,
+		remote_str,
+		ptr_log->remote_port,
+		proto_str,
+		can_reopen
+	);
+
+	if (ptr_info)
+		_r_obj_dereference (ptr_info);
+
+	if (app_name)
+		_r_obj_dereference (app_name);
+
+	_r_obj_dereference (ptr_app);
+
+	return ok;
+}
+
+VOID _modern_bridge_notify_decision (
+	_In_ HWND hwnd,
+	_In_ ULONG_PTR app_hash,
+	_In_ BOOLEAN is_allow,
+	_In_ LONG64 duration_seconds,
+	_In_ BOOLEAN reopen_app
+)
+{
+	PITEM_APP ptr_app;
+	PR_LIST rules;
+	HANDLE hengine;
+	WCHAR reopen_path[520] = {0};
+
+	ptr_app = _app_getappitem (app_hash);
+
+	if (!ptr_app)
+		return;
+
+	if (ptr_app->notification)
+		_r_obj_clearreference (&ptr_app->notification);
+
+	ptr_app->last_notify = _r_unixtime_now ();
+
+	if (is_allow)
+	{
+		ptr_app->is_enabled = TRUE;
+		ptr_app->is_silent = FALSE;
+		ptr_app->is_haveerrors = FALSE;
+
+		if (duration_seconds > 0)
+		{
+			_app_timer_set (hwnd, ptr_app, duration_seconds);
+		}
+		else if (_app_istimerset (ptr_app))
+		{
+			_app_timer_remove (ptr_app);
+			ptr_app->timer = 0;
+		}
+
+		if (reopen_app && ptr_app->real_path && !_r_obj_isstringempty (ptr_app->real_path))
+			_modern_copy_wstr (reopen_path, RTL_NUMBER_OF (reopen_path), ptr_app->real_path->buffer);
+	}
+	else
+	{
+		if (_app_istimerset (ptr_app))
+			_app_timer_remove (ptr_app);
+
+		ptr_app->timer = 0;
+		ptr_app->is_enabled = FALSE;
+		ptr_app->is_silent = TRUE;
+		ptr_app->is_haveerrors = FALSE;
+	}
+
+	if (_wfp_isfiltersinstalled ())
+	{
+		hengine = _wfp_getenginehandle ();
+		rules = _r_obj_createlist (2, NULL);
+
+		_r_obj_addlistitem (rules, ptr_app);
+		_wfp_create3filters (hengine, rules, DBG_ARG, FALSE);
+
+		_r_obj_dereference (rules);
+	}
+
+	_app_listview_updateitemby_param (hwnd, app_hash, TRUE);
+	_app_profile_save (hwnd);
+
+	_r_obj_dereference (ptr_app);
+
+	// Optional safe reopen for regular desktop apps
+	if (reopen_path[0])
+	{
+		ShellExecuteW (NULL, L"open", reopen_path, NULL, NULL, SW_SHOWNORMAL);
+	}
+
+	_modern_ui_notify_change ();
+}
+
+VOID _modern_bridge_notify_dismiss (
+	_In_ ULONG_PTR app_hash
+)
+{
+	PITEM_APP ptr_app;
+
+	ptr_app = _app_getappitem (app_hash);
+
+	if (!ptr_app)
+		return;
+
+	if (ptr_app->notification)
+		_r_obj_clearreference (&ptr_app->notification);
+
+	ptr_app->last_notify = _r_unixtime_now ();
+
+	_r_obj_dereference (ptr_app);
 }

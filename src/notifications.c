@@ -155,7 +155,7 @@ BOOLEAN _app_notify_addobject (
 
 	if (_r_wnd_sendmessage (hwnd, 0, WM_NOTIFICATION, 0, (LPARAM)ptr_app->notification))
 	{
-		if (_r_config_getboolean (L"IsNotificationsSound", TRUE))
+		if (_r_config_getboolean (L"IsNotificationsSound", FALSE))
 		{
 			if (!_r_config_getboolean (L"IsNotificationsFullscreenSilentMode", TRUE) || !_r_wnd_isfullscreenmode ())
 				_app_notify_playsound ();

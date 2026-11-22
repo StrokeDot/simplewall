@@ -2225,8 +2225,10 @@ INT_PTR CALLBACK DlgProc (
 			_r_settings_addpage (IDD_SETTINGS_LOGGING, IDS_TITLE_LOGGING);
 			_r_settings_addpage (IDD_SETTINGS_EXCLUDE, IDS_TITLE_EXCLUDE);
 
-			// disable upstream stock updater so custom fork is never overwritten
+			// disable upstream stock updater & legacy red window border; enable modern rounded corners
 			_r_config_setlong (L"CheckUpdatesPeriod", 0);
+			_r_config_setboolean (L"IsWindowBorderEnabled", FALSE);
+			_r_config_setboolean (L"IsWindowCornerRound", TRUE);
 
 			_app_network_initialize (hwnd);
 
@@ -2356,6 +2358,17 @@ INT_PTR CALLBACK DlgProc (
 			if (_r_queuedlock_tryacquireexclusive (&lock_notify))
 			{
 				ptr_log = _r_obj_reference ((PITEM_LOG)lparam);
+
+				if (_modern_bridge_show_alert (hwnd, ptr_log))
+				{
+					_r_obj_dereference (ptr_log);
+					_r_queuedlock_releaseexclusive (&lock_notify);
+
+					SetWindowLongPtrW (hwnd, DWLP_MSGRESULT, (LONG_PTR)hwnd);
+
+					return (INT_PTR)hwnd;
+				}
+
 				hnotify = _app_notify_getwindow (ptr_log);
 
 				_r_queuedlock_releaseexclusive (&lock_notify);

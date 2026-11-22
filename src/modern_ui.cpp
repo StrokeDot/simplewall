@@ -81,13 +81,35 @@ struct FileMeta
 	std::wstring iconDataUrl;
 };
 
+struct AlertItem
+{
+	ULONG_PTR appHash = 0;
+	std::wstring name;
+	std::wstring path;
+	std::wstring signature;
+	std::wstring remoteAddr;
+	UINT16 remotePort = 0;
+	std::wstring protocol;
+	bool canReopen = false;
+};
+
 HWND g_hwnd = nullptr;
+ICoreWebView2Environment *g_env = nullptr;
 ICoreWebView2Controller *g_controller = nullptr;
 ICoreWebView2 *g_webview = nullptr;
 EventRegistrationToken g_msgToken = {};
 std::atomic<bool> g_active{false};
 std::atomic<bool> g_initialized{false};
 std::atomic<bool> g_refreshPending{false};
+
+// Bottom-right animated alert popup
+HWND g_alertHwnd = nullptr;
+ICoreWebView2Controller *g_alertController = nullptr;
+ICoreWebView2 *g_alertWebview = nullptr;
+EventRegistrationToken g_alertMsgToken = {};
+std::atomic<bool> g_alertReady{false};
+std::atomic<bool> g_alertHtmlReady{false};
+std::deque<AlertItem> g_alertQueue;
 
 std::mutex g_activityMutex;
 std::deque<ActivityItem> g_activity;
@@ -1092,10 +1114,10 @@ void HandleWebMessage (const std::wstring &json)
 
 // ---- Load embedded HTML resource ----
 
-std::wstring LoadEmbeddedHtml ()
+std::wstring LoadEmbeddedResourceHtml (UINT resId)
 {
 	HMODULE hMod = GetModuleHandleW (nullptr);
-	HRSRC hRes = FindResourceW (hMod, MAKEINTRESOURCEW (IDR_MODERN_UI), RT_RCDATA);
+	HRSRC hRes = FindResourceW (hMod, MAKEINTRESOURCEW (resId), RT_RCDATA);
 	if (!hRes) return {};
 	HGLOBAL hData = LoadResource (hMod, hRes);
 	if (!hData) return {};
@@ -1103,6 +1125,317 @@ std::wstring LoadEmbeddedHtml ()
 	const char *ptr = (const char *)LockResource (hData);
 	if (!ptr || sz == 0) return {};
 	return Utf8ToWide (std::string (ptr, sz));
+}
+
+// ---- Bottom-right animated alert popup helpers ----
+
+void PositionAlertBottomRight ()
+{
+	if (!g_alertHwnd || !IsWindow (g_alertHwnd))
+		return;
+
+	UINT dpi = GetDpiForWindow (g_alertHwnd);
+	if (dpi == 0) dpi = 96;
+	int w = MulDiv (432, (int)dpi, 96);
+	int h = MulDiv (282, (int)dpi, 96);
+	int margin = MulDiv (16, (int)dpi, 96);
+
+	RECT wa = {};
+	SystemParametersInfoW (SPI_GETWORKAREA, 0, &wa, 0);
+
+	int x = wa.right - w - margin;
+	int y = wa.bottom - h - margin;
+
+	SetWindowPos (g_alertHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
+
+	if (g_alertController)
+	{
+		RECT rc = {0, 0, w, h};
+		g_alertController->put_Bounds (rc);
+	}
+}
+
+void ShowFrontAlert ()
+{
+	if (!g_alertHwnd || !g_alertWebview || !g_alertHtmlReady.load ())
+		return;
+
+	if (g_alertQueue.empty ())
+	{
+		ShowWindow (g_alertHwnd, SW_HIDE);
+		if (g_alertController)
+			g_alertController->put_IsVisible (FALSE);
+		return;
+	}
+
+	const auto &a = g_alertQueue.front ();
+	std::wstring fileName = ExtractFileName (a.path);
+	FileMeta meta = GetFileMeta (a.path, !a.path.empty ());
+
+	MODERN_STATE_SNAPSHOT st = {};
+	_modern_bridge_get_state (&st);
+
+	std::wostringstream ss;
+	ss << L"{\"type\":\"showAlert\""
+		<< L",\"id\":\"" << a.appHash << L"\""
+		<< L",\"name\":\"" << JsonEscape (a.name.empty () ? fileName : a.name) << L"\""
+		<< L",\"fileName\":\"" << JsonEscape (fileName) << L"\""
+		<< L",\"path\":\"" << JsonEscape (a.path) << L"\""
+		<< L",\"signature\":\"" << JsonEscape (a.signature) << L"\""
+		<< L",\"company\":\"" << JsonEscape (meta.company) << L"\""
+		<< L",\"description\":\"" << JsonEscape (meta.description) << L"\""
+		<< L",\"parentApp\":\"" << JsonEscape (meta.parentApp) << L"\""
+		<< L",\"iconDataUrl\":\"" << JsonEscape (meta.iconDataUrl) << L"\""
+		<< L",\"remoteAddr\":\"" << JsonEscape (a.remoteAddr) << L"\""
+		<< L",\"remotePort\":" << a.remotePort
+		<< L",\"protocol\":\"" << JsonEscape (a.protocol) << L"\""
+		<< L",\"canReopen\":" << (a.canReopen ? L"true" : L"false")
+		<< L",\"queueCount\":" << g_alertQueue.size ()
+		<< L",\"theme\":\"" << (st.is_dark_theme ? L"dark" : L"light") << L"\""
+		<< L",\"soundEnabled\":" << (st.sound ? L"true" : L"false")
+		<< L"}";
+
+	PositionAlertBottomRight ();
+	g_alertWebview->PostWebMessageAsJson (ss.str ().c_str ());
+	if (g_alertController)
+		g_alertController->put_IsVisible (TRUE);
+	ShowWindow (g_alertHwnd, SW_SHOWNOACTIVATE);
+}
+
+void HandleAlertMessage (const std::wstring &json)
+{
+	std::wstring action;
+	if (!ExtractJsonString (json, L"action", action))
+		return;
+
+	if (action == L"alertReady")
+	{
+		g_alertHtmlReady.store (true);
+		if (!g_alertQueue.empty ())
+			ShowFrontAlert ();
+	}
+	else if (action == L"decide")
+	{
+		std::wstring idStr, decision;
+		LONG64 dur = 0;
+		bool reopen = false;
+		if (ExtractJsonString (json, L"id", idStr) && ExtractJsonString (json, L"decision", decision))
+		{
+			ExtractJsonInt64 (json, L"durationSeconds", dur);
+			ExtractJsonBool (json, L"reopen", reopen);
+			ULONG_PTR h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+			if (h)
+			{
+				_modern_bridge_notify_decision (g_hwnd, h, decision == L"allow" ? TRUE : FALSE, dur, reopen ? TRUE : FALSE);
+			}
+		}
+	}
+	else if (action == L"animDone" || action == L"dismiss")
+	{
+		std::wstring idStr;
+		ULONG_PTR h = 0;
+		if (ExtractJsonString (json, L"id", idStr))
+			h = (ULONG_PTR)wcstoull (idStr.c_str (), nullptr, 10);
+
+		if (action == L"dismiss" && h)
+			_modern_bridge_notify_dismiss (h);
+
+		if (!g_alertQueue.empty ())
+		{
+			if (h == 0 || g_alertQueue.front ().appHash == h)
+			{
+				g_alertQueue.pop_front ();
+			}
+			else
+			{
+				for (auto it = g_alertQueue.begin (); it != g_alertQueue.end (); ++it)
+				{
+					if (it->appHash == h) { g_alertQueue.erase (it); break; }
+				}
+			}
+		}
+
+		ShowFrontAlert ();
+	}
+	else if (action == L"next")
+	{
+		if (g_alertQueue.size () > 1)
+		{
+			auto front = std::move (g_alertQueue.front ());
+			g_alertQueue.pop_front ();
+			g_alertQueue.push_back (std::move (front));
+			ShowFrontAlert ();
+		}
+	}
+	else if (action == L"toggleSound")
+	{
+		bool enabled = false;
+		if (ExtractJsonBool (json, L"enabled", enabled))
+			_modern_bridge_set_setting (g_hwnd, L"IsNotificationsSound", enabled ? TRUE : FALSE);
+	}
+	else if (action == L"openFolder")
+	{
+		std::wstring path;
+		if (ExtractJsonString (json, L"path", path) && !path.empty ())
+		{
+			std::wstring args = L"/select,\"" + path + L"\"";
+			ShellExecuteW (g_hwnd, L"open", L"explorer.exe", args.c_str (), nullptr, SW_SHOWNORMAL);
+		}
+	}
+}
+
+LRESULT CALLBACK AlertWndProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
+{
+	switch (msg)
+	{
+		case WM_MOUSEACTIVATE:
+			return MA_NOACTIVATE;
+		case WM_SIZE:
+			if (g_alertController)
+			{
+				RECT rc = {};
+				if (GetClientRect (hwnd, &rc))
+					g_alertController->put_Bounds (rc);
+			}
+			return 0;
+	}
+	return DefWindowProcW (hwnd, msg, wparam, lparam);
+}
+
+class AlertMessageHandler final : public ICoreWebView2WebMessageReceivedEventHandler
+{
+	std::atomic<ULONG> m_ref{1};
+public:
+	HRESULT STDMETHODCALLTYPE QueryInterface (REFIID riid, void **ppv) override
+	{
+		if (riid == IID_IUnknown || riid == IID_ICoreWebView2WebMessageReceivedEventHandler)
+		{
+			*ppv = static_cast<ICoreWebView2WebMessageReceivedEventHandler *>(this);
+			AddRef ();
+			return S_OK;
+		}
+		*ppv = nullptr;
+		return E_NOINTERFACE;
+	}
+	ULONG STDMETHODCALLTYPE AddRef () override { return ++m_ref; }
+	ULONG STDMETHODCALLTYPE Release () override
+	{
+		ULONG c = --m_ref;
+		if (c == 0) delete this;
+		return c;
+	}
+	HRESULT STDMETHODCALLTYPE Invoke (ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) override
+	{
+		LPWSTR raw = nullptr;
+		if (SUCCEEDED (args->TryGetWebMessageAsString (&raw)) && raw)
+		{
+			HandleAlertMessage (raw);
+			CoTaskMemFree (raw);
+		}
+		return S_OK;
+	}
+};
+
+class AlertCtrlCompletedHandler final : public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler
+{
+	std::atomic<ULONG> m_ref{1};
+public:
+	HRESULT STDMETHODCALLTYPE QueryInterface (REFIID riid, void **ppv) override
+	{
+		if (riid == IID_IUnknown || riid == IID_ICoreWebView2CreateCoreWebView2ControllerCompletedHandler)
+		{
+			*ppv = static_cast<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler *>(this);
+			AddRef ();
+			return S_OK;
+		}
+		*ppv = nullptr;
+		return E_NOINTERFACE;
+	}
+	ULONG STDMETHODCALLTYPE AddRef () override { return ++m_ref; }
+	ULONG STDMETHODCALLTYPE Release () override
+	{
+		ULONG c = --m_ref;
+		if (c == 0) delete this;
+		return c;
+	}
+	HRESULT STDMETHODCALLTYPE Invoke (HRESULT result, ICoreWebView2Controller *controller) override
+	{
+		if (FAILED (result) || !controller || !g_alertHwnd || !IsWindow (g_alertHwnd))
+			return S_OK;
+
+		g_alertController = controller;
+		g_alertController->AddRef ();
+		g_alertController->get_CoreWebView2 (&g_alertWebview);
+
+		if (g_alertWebview)
+		{
+			ICoreWebView2Settings *settings = nullptr;
+			if (SUCCEEDED (g_alertWebview->get_Settings (&settings)) && settings)
+			{
+				settings->put_AreDefaultContextMenusEnabled (FALSE);
+				settings->put_AreDevToolsEnabled (FALSE);
+				settings->put_IsStatusBarEnabled (FALSE);
+				settings->put_IsZoomControlEnabled (FALSE);
+				settings->Release ();
+			}
+
+			auto *h = new AlertMessageHandler ();
+			g_alertWebview->add_WebMessageReceived (h, &g_alertMsgToken);
+			h->Release ();
+
+			g_alertController->put_IsVisible (FALSE);
+			g_alertReady.store (true);
+
+			std::wstring html = LoadEmbeddedResourceHtml (IDR_MODERN_ALERT);
+			if (!html.empty ())
+				g_alertWebview->NavigateToString (html.c_str ());
+		}
+
+		return S_OK;
+	}
+};
+
+void InitAlertHostWindow (ICoreWebView2Environment *env)
+{
+	if (!env || g_alertHwnd)
+		return;
+
+	static bool classReg = false;
+	if (!classReg)
+	{
+		WNDCLASSEXW wc = {};
+		wc.cbSize = sizeof (wc);
+		wc.lpfnWndProc = AlertWndProc;
+		wc.hInstance = GetModuleHandleW (nullptr);
+		wc.lpszClassName = L"SimpleWallModernAlertClass";
+		RegisterClassExW (&wc);
+		classReg = true;
+	}
+
+	g_alertHwnd = CreateWindowExW (
+		WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+		L"SimpleWallModernAlertClass",
+		L"simplewall Alert",
+		WS_POPUP | WS_CLIPCHILDREN,
+		0, 0, 432, 282,
+		nullptr,
+		nullptr,
+		GetModuleHandleW (nullptr),
+		nullptr
+	);
+
+	if (g_alertHwnd)
+	{
+		// Windows 11 rounded corners + no OS border (our HTML draws the animated glowing corner border!)
+		DWORD corner = 2; // DWMWCP_ROUND
+		DwmSetWindowAttribute (g_alertHwnd, 33, &corner, sizeof (corner));
+		COLORREF noBorder = 0xFFFFFFFE; // DWMWA_COLOR_NONE
+		DwmSetWindowAttribute (g_alertHwnd, 34, &noBorder, sizeof (noBorder));
+
+		auto *handler = new AlertCtrlCompletedHandler ();
+		env->CreateCoreWebView2Controller (g_alertHwnd, handler);
+		handler->Release ();
+	}
 }
 
 // ---- Pure COM WebView2 Handlers ----
@@ -1202,7 +1535,7 @@ public:
 			// Apply dark/light titlebar
 			_modern_ui_apply_titlebar_theme (g_hwnd);
 
-			std::wstring html = LoadEmbeddedHtml ();
+			std::wstring html = LoadEmbeddedResourceHtml (IDR_MODERN_UI);
 			if (!html.empty ())
 				g_webview->NavigateToString (html.c_str ());
 		}
@@ -1238,9 +1571,17 @@ public:
 		if (FAILED (result) || !env || !g_hwnd || !IsWindow (g_hwnd))
 			return S_OK;
 
+		if (g_env) g_env->Release ();
+		g_env = env;
+		g_env->AddRef ();
+
 		auto *ctrlHandler = new CtrlCompletedHandler ();
 		env->CreateCoreWebView2Controller (g_hwnd, ctrlHandler);
 		ctrlHandler->Release ();
+
+		// Pre-warm the bottom-right animated alert popup window
+		InitAlertHostWindow (env);
+
 		return S_OK;
 	}
 };
@@ -1315,6 +1656,29 @@ VOID _modern_ui_destroy (
 )
 {
 	g_active.store (false);
+	g_alertReady.store (false);
+	g_alertHtmlReady.store (false);
+	g_alertQueue.clear ();
+
+	if (g_alertWebview)
+	{
+		g_alertWebview->remove_WebMessageReceived (g_alertMsgToken);
+		g_alertWebview->Release ();
+		g_alertWebview = nullptr;
+	}
+
+	if (g_alertController)
+	{
+		g_alertController->Close ();
+		g_alertController->Release ();
+		g_alertController = nullptr;
+	}
+
+	if (g_alertHwnd && IsWindow (g_alertHwnd))
+	{
+		DestroyWindow (g_alertHwnd);
+		g_alertHwnd = nullptr;
+	}
 
 	if (g_webview)
 	{
@@ -1328,6 +1692,12 @@ VOID _modern_ui_destroy (
 		g_controller->Close ();
 		g_controller->Release ();
 		g_controller = nullptr;
+	}
+
+	if (g_env)
+	{
+		g_env->Release ();
+		g_env = nullptr;
 	}
 
 	g_hwnd = nullptr;
@@ -1399,6 +1769,71 @@ VOID _modern_ui_apply_titlebar_theme (
 	// 35 = DWMWA_CAPTION_COLOR (Windows 11)
 	COLORREF captionColor = useDark ? RGB (19, 25, 36) : RGB (255, 255, 255);
 	DwmSetWindowAttribute (hwnd, 35, &captionColor, sizeof (captionColor));
+	// 34 = DWMWA_BORDER_COLOR (remove Windows red accent outline with clean neutral border)
+	COLORREF borderColor = useDark ? RGB (42, 52, 68) : RGB (203, 213, 225);
+	DwmSetWindowAttribute (hwnd, 34, &borderColor, sizeof (borderColor));
+	// 33 = DWMWA_WINDOW_CORNER_PREFERENCE -> DWMWCP_ROUND (2)
+	DWORD corner = 2;
+	DwmSetWindowAttribute (hwnd, 33, &corner, sizeof (corner));
+}
+
+BOOLEAN _modern_alert_isready (
+	VOID
+)
+{
+	return (g_alertReady.load () && g_alertHwnd && IsWindow (g_alertHwnd)) ? TRUE : FALSE;
+}
+
+BOOLEAN _modern_alert_enqueue (
+	_In_ ULONG_PTR app_hash,
+	_In_opt_ LPCWSTR name,
+	_In_opt_ LPCWSTR path,
+	_In_opt_ LPCWSTR signature,
+	_In_opt_ LPCWSTR remote_addr,
+	_In_ UINT16 remote_port,
+	_In_opt_ LPCWSTR protocol,
+	_In_ BOOLEAN can_reopen
+)
+{
+	if (!_modern_alert_isready ())
+		return FALSE;
+
+	AlertItem item;
+	item.appHash = app_hash;
+	if (name) item.name = name;
+	if (path) item.path = path;
+	if (signature) item.signature = signature;
+	if (remote_addr) item.remoteAddr = remote_addr;
+	item.remotePort = remote_port;
+	if (protocol) item.protocol = protocol;
+	item.canReopen = (can_reopen != FALSE);
+
+	bool wasEmpty = g_alertQueue.empty ();
+	bool updated = false;
+	for (auto &existing : g_alertQueue)
+	{
+		if (existing.appHash == app_hash)
+		{
+			existing = item;
+			updated = true;
+			break;
+		}
+	}
+
+	if (!updated)
+		g_alertQueue.push_back (std::move (item));
+
+	if (wasEmpty || g_alertQueue.front ().appHash == app_hash || !IsWindowVisible (g_alertHwnd))
+	{
+		ShowFrontAlert ();
+	}
+	else
+	{
+		// Refresh queue counter on currently visible alert
+		ShowFrontAlert ();
+	}
+
+	return TRUE;
 }
 
 VOID _modern_ui_push_activity_raw (

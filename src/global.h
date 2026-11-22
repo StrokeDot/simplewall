@@ -125,3 +125,8 @@ VOID _modern_bridge_push_activity (
 	_In_ PITEM_LOG ptr_log,
 	_In_opt_ PITEM_APP ptr_app
 );
+
+BOOLEAN _modern_bridge_show_alert (
+	_In_ HWND hwnd,
+	_In_ PITEM_LOG ptr_log
+);
