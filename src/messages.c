@@ -950,7 +950,7 @@ VOID _app_message_traycontextmenu (
 				3,
 				MF_BYPOSITION | MF_POPUP | (is_applying ? MF_GRAYED : 0),
 				(UINT_PTR)hsafepause_menu,
-				is_safepause ? L"Safe Pause (ACTIVE — Blocked stay blocked)" : L"Safe Pause (Keep Blocked Apps Blocked)"
+				is_safepause ? L"Safe Pause (ACTIVE - Blocked stay blocked)" : L"Safe Pause (Keep Blocked Apps Blocked)"
 			);
 		}
 	}

@@ -211,9 +211,9 @@ int RunInstall ()
     tdc.pszMainInstruction = L"Install simplewall v" APP_VERSION;
     tdc.pszContent = L"This will install simplewall cleanly into:\n"
         L"C:\\Program Files\\simplewall\\\n\n"
-        L"• Registers properly in Windows Installed Apps & Revo Uninstaller\n"
-        L"• Creates a Start Menu shortcut with your new shield icon\n"
-        L"• Keeps all your existing allowed & blocked apps safe";
+        L"\u2022 Registers properly in Windows Installed Apps & Revo Uninstaller\n"
+        L"\u2022 Creates a Start Menu shortcut with your new shield icon\n"
+        L"\u2022 Keeps all your existing allowed & blocked apps safe";
     tdc.pszVerificationText = L"Create a Desktop shortcut";
 
     TASKDIALOG_BUTTON buttons[] = {

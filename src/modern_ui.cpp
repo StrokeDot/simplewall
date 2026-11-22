@@ -967,7 +967,7 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 		{
 			CloseHandle (pi.hThread);
 			CloseHandle (pi.hProcess);
-			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"message\":\"Update ready — restarting SimpleWall...\"}");
+			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"message\":\"Update ready - restarting simplewall...\"}");
 			if (g_hwnd && IsWindow (g_hwnd))
 				PostMessageW (g_hwnd, WM_MODERN_UI_EXIT_FOR_UPDATE, 0, 0);
 		}
@@ -1070,7 +1070,7 @@ void HandleWebMessage (const std::wstring &json)
 					encoded += hex;
 				}
 			}
-			std::wstring url = L"https://duckduckgo.com/?q=" + encoded;
+			std::wstring url = L"https://www.google.com/search?q=" + encoded;
 			ShellExecuteW (g_hwnd, L"open", url.c_str (), nullptr, nullptr, SW_SHOWNORMAL);
 		}
 	}

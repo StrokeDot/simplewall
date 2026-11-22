@@ -2392,7 +2392,7 @@ INT_PTR CALLBACK DlgProc (
 					&GUID_TrayIcon,
 					NIIF_INFO,
 					_r_app_getname (),
-					L"Safe Pause ended — Strict Protection resumed."
+					L"Safe Pause ended - Strict Protection resumed."
 				);
 			}
 

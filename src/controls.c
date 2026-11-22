@@ -693,7 +693,7 @@ VOID _app_settrayicon (
 			_r_str_printf (
 				tooltip,
 				RTL_NUMBER_OF (tooltip),
-				L"%s — Safe Pause (%lldm left, blocked apps stay blocked)",
+				L"%s - Safe Pause (%lldm left, blocked apps stay blocked)",
 				_r_app_getname (),
 				(remaining + 59) / 60
 			);
@@ -703,7 +703,7 @@ VOID _app_settrayicon (
 			_r_str_printf (
 				tooltip,
 				RTL_NUMBER_OF (tooltip),
-				L"%s — Safe Pause (blocked apps stay blocked)",
+				L"%s - Safe Pause (blocked apps stay blocked)",
 				_r_app_getname ()
 			);
 		}
