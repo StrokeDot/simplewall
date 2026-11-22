@@ -396,13 +396,9 @@ std::wstring InferParentApp (const std::wstring &path)
 
 // ---- Icon to base64 PNG via WIC ----
 
-std::wstring ExtractIconDataUrl (const std::wstring &path)
+std::wstring EncodeHIconToDataUrl (HICON hIcon)
 {
-	if (path.empty ()) return {};
-
-	SHFILEINFOW sfi = {};
-	if (!SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_ICON | SHGFI_LARGEICON) || !sfi.hIcon)
-		return {};
+	if (!hIcon) return {};
 
 	std::wstring result;
 	IWICImagingFactory *factory = nullptr;
@@ -413,7 +409,7 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 
 	HRESULT hr = CoCreateInstance (CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS (&factory));
 	if (SUCCEEDED (hr))
-		hr = factory->CreateBitmapFromHICON (sfi.hIcon, &wicBitmap);
+		hr = factory->CreateBitmapFromHICON (hIcon, &wicBitmap);
 	if (SUCCEEDED (hr))
 		hr = CreateStreamOnHGlobal (nullptr, TRUE, &stream);
 	if (SUCCEEDED (hr))
@@ -451,9 +447,38 @@ std::wstring ExtractIconDataUrl (const std::wstring &path)
 	if (stream) stream->Release ();
 	if (wicBitmap) wicBitmap->Release ();
 	if (factory) factory->Release ();
-	DestroyIcon (sfi.hIcon);
 
 	return result;
+}
+
+std::wstring ExtractIconDataUrl (const std::wstring &path)
+{
+	if (path.empty ()) return {};
+
+	SHFILEINFOW sfi = {};
+	if (!SHGetFileInfoW (path.c_str (), 0, &sfi, sizeof (sfi), SHGFI_ICON | SHGFI_LARGEICON) || !sfi.hIcon)
+		return {};
+
+	std::wstring result = EncodeHIconToDataUrl (sfi.hIcon);
+	DestroyIcon (sfi.hIcon);
+	return result;
+}
+
+std::wstring GetMainAppIconDataUrl ()
+{
+	static std::wstring cached;
+	static bool loaded = false;
+	if (!loaded)
+	{
+		loaded = true;
+		HICON hIcon = (HICON)LoadImageW (GetModuleHandleW (nullptr), MAKEINTRESOURCEW (IDI_MAIN), IMAGE_ICON, 64, 64, LR_DEFAULTCOLOR);
+		if (hIcon)
+		{
+			cached = EncodeHIconToDataUrl (hIcon);
+			DestroyIcon (hIcon);
+		}
+	}
+	return cached;
 }
 
 // ---- Version info extractor ----
@@ -579,6 +604,7 @@ std::wstring BuildFullSnapshotJson ()
 		<< L",\"theme\":\"" << (st.is_dark_theme ? L"dark" : L"light") << L"\""
 		<< L",\"appVersion\":\"" << JsonEscape (APP_FORK_VERSION) << L"\""
 		<< L",\"forkRepo\":\"" << JsonEscape (APP_FORK_OWNER L"/" APP_FORK_REPO) << L"\""
+		<< L",\"appIconDataUrl\":\"" << JsonEscape (GetMainAppIconDataUrl ()) << L"\""
 		<< L",\"settings\":{"
 		<< L"\"notifications\":" << (st.notifications ? L"true" : L"false")
 		<< L",\"sound\":" << (st.sound ? L"true" : L"false")

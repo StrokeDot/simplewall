@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>simplewall Personal</title>
+<title>simplewall</title>
 <style>
 :root {
   --font: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -732,10 +732,10 @@ html, body {
   <!-- Sidebar -->
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-logo">SW</div>
+      <div class="brand-logo" id="brandLogo">SW</div>
       <div>
-        <div class="brand-title">SimpleWall</div>
-        <div class="brand-sub" id="sidebarVersion">Personal Edition</div>
+        <div class="brand-title">simplewall</div>
+        <div class="brand-sub" id="sidebarVersion">v4.0.0</div>
       </div>
     </div>
 
@@ -1583,6 +1583,12 @@ if (window.chrome && window.chrome.webview) {
       state.appVersion = msg.appVersion || state.appVersion;
       state.forkRepo = msg.forkRepo || state.forkRepo;
       state.settings = msg.settings || {};
+      if (msg.appIconDataUrl) {
+        const logo = document.getElementById('brandLogo');
+        logo.style.background = 'transparent';
+        logo.style.boxShadow = 'none';
+        logo.innerHTML = `<img src="${msg.appIconDataUrl}" style="width:34px;height:34px;object-fit:contain" alt="">`;
+      }
       if (msg.theme) applyThemeUI(msg.theme);
       if (Array.isArray(msg.apps)) state.apps = msg.apps;
       if (Array.isArray(msg.activity)) state.activity = msg.activity;

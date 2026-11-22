@@ -3,7 +3,7 @@
 
 #pragma once
 
-#define APP_NAME L"simplewall Personal"
+#define APP_NAME L"simplewall"
 #define APP_NAME_SHORT L"simplewall"
 #define APP_VERSION L"4.0.0"
 #define APP_VERSION_RES 4,0,0,0
