@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>simplewall</title>
+<title>SimpleWall</title>
 <style>
 :root {
   --font: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -764,8 +764,8 @@ html, body {
     <div class="brand">
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
-        <div class="brand-title">simplewall</div>
-        <div class="brand-sub" id="sidebarVersion">v4.0.0</div>
+        <div class="brand-title">SimpleWall</div>
+        <div class="brand-sub" id="sidebarVersion">v4.1.2</div>
       </div>
     </div>
 
@@ -1055,7 +1055,7 @@ function deleteApps(ids) {
 }
 
 function renderChrome() {
-  document.getElementById('sidebarVersion').textContent = `Personal v${state.appVersion}`;
+  document.getElementById('sidebarVersion').textContent = `v${state.appVersion}`;
   const allowedCount = state.apps.filter(a => a.status === 'allowed').length;
   const blockedCount = state.apps.filter(a => a.status === 'blocked' && (state.includeSystem || a.isSilent || (a.category !== 'service' && a.category !== 'uwp'))).length;
   const missingCount = state.apps.filter(a => !a.exists && !a.isSystem).length;
@@ -1312,11 +1312,16 @@ function renderActivityRow(ev) {
     : `<span class="pill pill-red">Blocked</span>`;
   const dest = ev.remoteAddr ? `${ev.remoteAddr}${ev.remotePort ? ':' + ev.remotePort : ''}` : 'Local / Unknown';
 
+  const countPill = (ev.count && ev.count > 1)
+    ? `<span class="pill pill-amber">×${ev.count} tries</span>`
+    : '';
+
   return `<div class="app-row" onclick="${ev.appId ? `selectApp('${ev.appId}')` : ''}">
     <div class="app-main">
       <div class="app-name-line">
         ${badge}
         <span class="app-name">${esc(name)}</span>
+        ${countPill}
         <span class="pill pill-muted">${esc(ev.protocol || 'NET')} · ${esc(ev.direction || 'Out')}</span>
       </div>
       <div class="app-sub">${esc(dest)} · ${esc(formatDate(ev.timestamp))}</div>
@@ -1356,31 +1361,30 @@ function toggleSetting(key, val) {
 
 function renderSettings() {
   const s = state.settings;
-  let updateBody = `<div style="font-size:13px;color:var(--text-2)">Checks your personal GitHub fork (<strong>${esc(state.forkRepo)}</strong>) for new releases.</div>`;
+  let updateBody = '';
 
   if (state.updateStatus === 'checking') {
-    updateBody = `<div style="font-size:13px;color:var(--accent)">Checking ${esc(state.forkRepo)} for updates...</div>`;
+    updateBody = `<div style="font-size:13px;color:var(--accent);margin-top:8px">Checking for updates...</div>`;
   } else if (state.updateStatus === 'downloading') {
-    updateBody = `<div style="font-size:13px;color:var(--amber)">${esc(state.updateMessage || 'Downloading update...')}</div>`;
+    updateBody = `<div style="font-size:13px;color:var(--amber);margin-top:8px">${esc(state.updateMessage || 'Downloading update...')}</div>`;
   } else if (state.updateStatus === 'error') {
-    updateBody = `<div style="font-size:13px;color:var(--red)">${esc(state.updateMessage || 'Could not reach GitHub releases.')}</div>`;
+    updateBody = `<div style="font-size:13px;color:var(--red);margin-top:8px">${esc(state.updateMessage || 'Could not check for updates.')}</div>`;
   } else if (state.updateInfo) {
     const u = state.updateInfo;
     if (u.hasUpdate) {
       updateBody = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px">
           <div>
             <div style="font-weight:700;color:var(--green)">Update available: ${esc(u.latestVersion)}</div>
-            <div style="font-size:12px;color:var(--text-2)">Current version: v${esc(state.appVersion)}</div>
           </div>
           ${u.downloadUrl
-            ? `<button class="btn btn-primary" onclick="installUpdate()">Download & Install Update</button>`
+            ? `<button class="btn btn-primary" onclick="installUpdate()">Download & Install</button>`
             : `<button class="btn btn-primary" onclick="send('openUrl', { url: '${esc(u.htmlUrl)}' })">Open Release Page</button>`}
         </div>
         ${u.releaseNotes ? `<div class="release-notes">${esc(u.releaseNotes)}</div>` : ''}
       `;
     } else {
-      updateBody = `<div style="font-size:13px;color:var(--green)">You're up to date! (v${esc(state.appVersion)} — latest on ${esc(state.forkRepo)} is ${esc(u.latestVersion || ('v'+state.appVersion))})</div>`;
+      updateBody = `<div style="font-size:13px;color:var(--green);margin-top:8px">You're up to date (v${esc(state.appVersion)}).</div>`;
     }
   }
 
@@ -1388,17 +1392,14 @@ function renderSettings() {
     <div class="page-header">
       <div>
         <div class="page-title">Settings & Updates</div>
-        <div class="page-sub">Customize appearance, alerts, core protection, and one-click updates from your GitHub fork.</div>
+        <div class="page-sub">Customize appearance, alerts, protection rules, and updates.</div>
       </div>
     </div>
 
     <div class="card" style="margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
-        <div>
-          <div style="font-weight:700;font-size:15px">Personal Fork Updater</div>
-          <div style="font-size:12px;color:var(--text-2)">Installed version: v${esc(state.appVersion)} · Repo: ${esc(state.forkRepo)}</div>
-        </div>
-        <button class="btn" onclick="checkForUpdates()" ${state.updateStatus==='checking'||state.updateStatus==='downloading'?'disabled':''}>Check for Updates</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="font-weight:700;font-size:15px">Updater</div>
+        <button class="btn" onclick="checkForUpdates()" ${state.updateStatus==='checking'||state.updateStatus==='downloading'?'disabled':''}>Check Updates</button>
       </div>
       ${updateBody}
     </div>

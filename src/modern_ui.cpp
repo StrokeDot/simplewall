@@ -80,6 +80,7 @@ struct ActivityItem
 	std::wstring direction;
 	bool isAllow = false;
 	LONG64 timestamp = 0;
+	UINT32 count = 1;
 };
 
 struct FileMeta
@@ -869,6 +870,7 @@ std::wstring BuildActivityArrayJson ()
 			<< L",\"direction\":\"" << JsonEscape (ev.direction) << L"\""
 			<< L",\"isAllow\":" << (ev.isAllow ? L"true" : L"false")
 			<< L",\"timestamp\":" << ev.timestamp
+			<< L",\"count\":" << ev.count
 			<< L"}";
 	}
 	ss << L"]";
@@ -2619,9 +2621,28 @@ VOID _modern_ui_push_activity_raw (
 
 	{
 		std::lock_guard<std::mutex> lock (g_activityMutex);
-		g_activity.push_front (std::move (item));
-		if (g_activity.size () > kMaxActivity)
-			g_activity.pop_back ();
+		bool merged = false;
+		// Collapse repeated identical attempts (same app + destination + allow/block) into a clean counter
+		for (auto it = g_activity.begin (); it != g_activity.end (); ++it)
+		{
+			if (it->appHash == item.appHash &&
+				it->remoteAddr == item.remoteAddr &&
+				it->remotePort == item.remotePort &&
+				it->isAllow == item.isAllow)
+			{
+				item.count = it->count + 1;
+				g_activity.erase (it);
+				g_activity.push_front (std::move (item));
+				merged = true;
+				break;
+			}
+		}
+		if (!merged)
+		{
+			g_activity.push_front (std::move (item));
+			if (g_activity.size () > kMaxActivity)
+				g_activity.pop_back ();
+		}
 	}
 
 	_modern_ui_notify_change ();
