@@ -40,6 +40,7 @@ VOID _modern_bridge_get_state (
 	out_state->stealth_mode = _r_config_getboolean (L"UseStealthMode", TRUE);
 	out_state->allow_loopback = _r_config_getboolean (L"AllowLoopbackConnections", TRUE);
 	out_state->allow_ipv6 = _r_config_getboolean (L"AllowIPv6", TRUE);
+	out_state->auto_start_init = _r_config_getboolean (L"AutoStartInitialized", FALSE);
 }
 
 BOOLEAN _modern_bridge_get_apps (

@@ -20,6 +20,7 @@
 #include <mscat.h>
 #include <winhttp.h>
 #include <winver.h>
+#include <taskschd.h>
 
 #pragma warning(push)
 #pragma warning(disable: 4996)
@@ -50,6 +51,8 @@
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "taskschd.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "version.lib")
@@ -2070,6 +2073,220 @@ std::wstring BuildActivityArrayJson ()
 	return ss.str ();
 }
 
+std::atomic<bool> g_autoStartCached{false};
+
+constexpr LPCWSTR kAutoStartTaskName = L"SimpleWallAutoStart";
+
+bool IsAutoStartTaskEnabled ()
+{
+	ITaskService *pService = nullptr;
+	ITaskFolder *pRoot = nullptr;
+	IRegisteredTask *pTask = nullptr;
+	bool enabled = false;
+
+	HRESULT hr = CoCreateInstance (CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS (&pService));
+	if (SUCCEEDED (hr) && pService)
+	{
+		VARIANT vEmpty;
+		VariantInit (&vEmpty);
+		hr = pService->Connect (vEmpty, vEmpty, vEmpty, vEmpty);
+		if (SUCCEEDED (hr))
+		{
+			BSTR bRoot = SysAllocString (L"\\");
+			hr = pService->GetFolder (bRoot, &pRoot);
+			SysFreeString (bRoot);
+		}
+		if (SUCCEEDED (hr) && pRoot)
+		{
+			BSTR bName = SysAllocString (kAutoStartTaskName);
+			hr = pRoot->GetTask (bName, &pTask);
+			SysFreeString (bName);
+		}
+		if (SUCCEEDED (hr) && pTask)
+		{
+			VARIANT_BOOL vb = VARIANT_FALSE;
+			if (SUCCEEDED (pTask->get_Enabled (&vb)) && vb == VARIANT_TRUE)
+				enabled = true;
+		}
+	}
+
+	if (pTask) pTask->Release ();
+	if (pRoot) pRoot->Release ();
+	if (pService) pService->Release ();
+	g_autoStartCached.store (enabled);
+	return enabled;
+}
+
+bool SetAutoStartTaskEnabled (bool enable)
+{
+	WCHAR selfPath[MAX_PATH] = {};
+	GetModuleFileNameW (nullptr, selfPath, MAX_PATH);
+	if (!selfPath[0])
+		return false;
+
+	ITaskService *pService = nullptr;
+	ITaskFolder *pRoot = nullptr;
+	bool ok = false;
+
+	HRESULT hr = CoCreateInstance (CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS (&pService));
+	if (SUCCEEDED (hr) && pService)
+	{
+		VARIANT vEmpty;
+		VariantInit (&vEmpty);
+		hr = pService->Connect (vEmpty, vEmpty, vEmpty, vEmpty);
+		if (SUCCEEDED (hr))
+		{
+			BSTR bRoot = SysAllocString (L"\\");
+			hr = pService->GetFolder (bRoot, &pRoot);
+			SysFreeString (bRoot);
+		}
+
+		if (SUCCEEDED (hr) && pRoot)
+		{
+			BSTR bTaskName = SysAllocString (kAutoStartTaskName);
+			if (!enable)
+			{
+				HRESULT delHr = pRoot->DeleteTask (bTaskName, 0);
+				ok = SUCCEEDED (delHr) || delHr == HRESULT_FROM_WIN32 (ERROR_FILE_NOT_FOUND);
+			}
+			else
+			{
+				ITaskDefinition *pDef = nullptr;
+				hr = pService->NewTask (0, &pDef);
+				if (SUCCEEDED (hr) && pDef)
+				{
+					IRegistrationInfo *pRegInfo = nullptr;
+					if (SUCCEEDED (pDef->get_RegistrationInfo (&pRegInfo)) && pRegInfo)
+					{
+						BSTR bAuthor = SysAllocString (L"SimpleWall");
+						BSTR bDesc = SysAllocString (L"Starts SimpleWall minimized in the system tray at Windows logon with administrator privileges.");
+						pRegInfo->put_Author (bAuthor);
+						pRegInfo->put_Description (bDesc);
+						SysFreeString (bAuthor);
+						SysFreeString (bDesc);
+						pRegInfo->Release ();
+					}
+
+					IPrincipal *pPrincipal = nullptr;
+					if (SUCCEEDED (pDef->get_Principal (&pPrincipal)) && pPrincipal)
+					{
+						pPrincipal->put_LogonType (TASK_LOGON_INTERACTIVE_TOKEN);
+						pPrincipal->put_RunLevel (TASK_RUNLEVEL_HIGHEST);
+						pPrincipal->Release ();
+					}
+
+					ITaskSettings *pSettings = nullptr;
+					if (SUCCEEDED (pDef->get_Settings (&pSettings)) && pSettings)
+					{
+						pSettings->put_Enabled (VARIANT_TRUE);
+						pSettings->put_StartWhenAvailable (VARIANT_TRUE);
+						pSettings->put_DisallowStartIfOnBatteries (VARIANT_FALSE);
+						pSettings->put_StopIfGoingOnBatteries (VARIANT_FALSE);
+						pSettings->put_AllowDemandStart (VARIANT_TRUE);
+						pSettings->put_MultipleInstances (TASK_INSTANCES_IGNORE_NEW);
+						BSTR bLimit = SysAllocString (L"PT0S");
+						pSettings->put_ExecutionTimeLimit (bLimit);
+						SysFreeString (bLimit);
+						pSettings->Release ();
+					}
+
+					ITriggerCollection *pTriggers = nullptr;
+					if (SUCCEEDED (pDef->get_Triggers (&pTriggers)) && pTriggers)
+					{
+						ITrigger *pTrigger = nullptr;
+						if (SUCCEEDED (pTriggers->Create (TASK_TRIGGER_LOGON, &pTrigger)) && pTrigger)
+						{
+							pTrigger->put_Enabled (VARIANT_TRUE);
+							pTrigger->Release ();
+						}
+						pTriggers->Release ();
+					}
+
+					IActionCollection *pActions = nullptr;
+					if (SUCCEEDED (pDef->get_Actions (&pActions)) && pActions)
+					{
+						IAction *pAction = nullptr;
+						if (SUCCEEDED (pActions->Create (TASK_ACTION_EXEC, &pAction)) && pAction)
+						{
+							IExecAction *pExec = nullptr;
+							if (SUCCEEDED (pAction->QueryInterface (IID_PPV_ARGS (&pExec))) && pExec)
+							{
+								BSTR bExe = SysAllocString (selfPath);
+								BSTR bArgs = SysAllocString (L"-minimized");
+								pExec->put_Path (bExe);
+								pExec->put_Arguments (bArgs);
+								SysFreeString (bExe);
+								SysFreeString (bArgs);
+								pExec->Release ();
+							}
+							pAction->Release ();
+						}
+						pActions->Release ();
+					}
+
+					IRegisteredTask *pRegistered = nullptr;
+					hr = pRoot->RegisterTaskDefinition (
+						bTaskName,
+						pDef,
+						TASK_CREATE_OR_UPDATE,
+						vEmpty,
+						vEmpty,
+						TASK_LOGON_INTERACTIVE_TOKEN,
+						vEmpty,
+						&pRegistered);
+					if (SUCCEEDED (hr))
+					{
+						ok = true;
+						if (pRegistered) pRegistered->Release ();
+					}
+					pDef->Release ();
+				}
+			}
+			SysFreeString (bTaskName);
+		}
+	}
+
+	if (pRoot) pRoot->Release ();
+	if (pService) pService->Release ();
+
+	// Clean any stale legacy Run key so Windows doesn't attempt a duplicate non-elevated launch
+	HKEY hRunKey = nullptr;
+	if (RegOpenKeyExW (HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hRunKey) == ERROR_SUCCESS)
+	{
+		RegDeleteValueW (hRunKey, L"simplewall");
+		RegDeleteValueW (hRunKey, L"SimpleWall");
+		RegCloseKey (hRunKey);
+	}
+
+	if (ok)
+	{
+		g_autoStartCached.store (enable);
+		WriteAuditLogLine (L"STARTUP", enable
+			? L"Auto-start with Windows enabled (elevated logon task, starts minimized in tray)"
+			: L"Auto-start with Windows disabled");
+	}
+	return ok;
+}
+
+void InitAutoStartState (HWND hwnd)
+{
+	MODERN_STATE_SNAPSHOT st = {};
+	_modern_bridge_get_state (&st);
+
+	if (!st.auto_start_init)
+	{
+		// Auto-enable once on first launch of v4.2.11 so firewall alerts always run after restarts
+		SetAutoStartTaskEnabled (true);
+		_modern_bridge_set_setting (hwnd, L"AutoStartInitialized", TRUE);
+	}
+	else
+	{
+		// Refresh cached state (and if enabled, refresh path in case exe moved)
+		if (IsAutoStartTaskEnabled ())
+			SetAutoStartTaskEnabled (true);
+	}
+}
+
 std::wstring BuildFullSnapshotJson ()
 {
 	MODERN_STATE_SNAPSHOT st = {};
@@ -2095,7 +2312,8 @@ std::wstring BuildFullSnapshotJson ()
 		<< L",\"forkRepo\":\"" << JsonEscape (APP_FORK_OWNER L"/" APP_FORK_REPO) << L"\""
 		<< L",\"appIconDataUrl\":\"" << JsonEscape (GetMainAppIconDataUrl ()) << L"\""
 		<< L",\"settings\":{"
-		<< L"\"notifications\":" << (st.notifications ? L"true" : L"false")
+		<< L"\"autoStart\":" << (g_autoStartCached.load () ? L"true" : L"false")
+		<< L",\"notifications\":" << (st.notifications ? L"true" : L"false")
 		<< L",\"sound\":" << (st.sound ? L"true" : L"false")
 		<< L",\"blockInbound\":" << (st.block_inbound ? L"true" : L"false")
 		<< L",\"stealthMode\":" << (st.stealth_mode ? L"true" : L"false")
@@ -3590,7 +3808,15 @@ void HandleWebMessage (const std::wstring &json)
 		bool val = false;
 		if (ExtractJsonString (json, L"key", key) && ExtractJsonBool (json, L"value", val))
 		{
-			_modern_bridge_set_setting (g_hwnd, key.c_str (), val ? TRUE : FALSE);
+			if (key == L"AutoStart")
+			{
+				SetAutoStartTaskEnabled (val);
+				_modern_ui_notify_change ();
+			}
+			else
+			{
+				_modern_bridge_set_setting (g_hwnd, key.c_str (), val ? TRUE : FALSE);
+			}
 		}
 	}
 	else if (action == L"clearActivity")
@@ -4801,6 +5027,7 @@ BOOLEAN _modern_ui_init (
 	// Hide legacy Win32 controls IMMEDIATELY before first paint so the old UI never flashes!
 	_modern_bridge_hide_legacy_controls (hwnd);
 	_modern_ui_apply_titlebar_theme (hwnd);
+	InitAutoStartState (hwnd);
 	StartStandbyWatcher (hwnd);
 	WriteAuditLogLine (L"START", L"simplewall v" APP_FORK_VERSION L" started");
 

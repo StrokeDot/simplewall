@@ -41,6 +41,7 @@ typedef struct _MODERN_STATE_SNAPSHOT
 	BOOLEAN stealth_mode;
 	BOOLEAN allow_loopback;
 	BOOLEAN allow_ipv6;
+	BOOLEAN auto_start_init;
 } MODERN_STATE_SNAPSHOT;
 
 // Implemented in modern_ui.cpp

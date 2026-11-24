@@ -1014,7 +1014,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.10</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.11</div>
       </div>
     </div>
 
@@ -1117,7 +1117,7 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.2.10',
+  appVersion: '4.2.11',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
@@ -1971,7 +1971,14 @@ function renderSettings() {
     </div>
 
     <div class="card" style="margin-bottom:16px">
-      <div style="font-weight:700;font-size:15px;margin-bottom:4px">Alerts</div>
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px">Startup & Alerts</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">Start Automatically with Windows</div>
+          <div class="setting-desc">Launch quietly in the system tray after restarting your PC (no UAC prompt) so pop-up alerts always appear.</div>
+        </div>
+        <label class="switch"><input type="checkbox" ${s.autoStart?'checked':''} onchange="toggleSetting('AutoStart', this.checked)"><span class="slider"></span></label>
+      </div>
       <div class="setting-row">
         <div>
           <div class="setting-title">Pop-up Alerts for Blocked Apps</div>
