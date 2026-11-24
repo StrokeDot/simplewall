@@ -2833,7 +2833,9 @@ bool WinHttpGetToBytesOnce (const std::wstring &url, DWORD accessType, std::stri
 
 		LPCWSTR acceptHdr = isBinaryDownload
 			? L"Accept: application/octet-stream\r\n"
-			: L"Accept: application/vnd.github+json\r\n";
+			: (url.find (L"api.github.com") != std::wstring::npos
+				? L"Accept: application/vnd.github+json\r\n"
+				: L"Accept: application/json\r\n");
 		WinHttpAddRequestHeaders (hRequest, acceptHdr, (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
 
 		if (WinHttpSendRequest (hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
@@ -2901,9 +2903,15 @@ bool CurlIpv4Fallback (const std::wstring &url, std::string &outBody, DWORD &out
 	std::wstring outPath = std::wstring (tempDir) + (isBinaryDownload ? L"sw_curl_dl.bin" : L"sw_curl_api.json");
 	DeleteFileW (outPath.c_str ());
 
+	std::wstring acceptArg = isBinaryDownload
+		? L""
+		: (url.find (L"api.github.com") != std::wstring::npos
+			? L"-H \"Accept: application/vnd.github+json\" "
+			: L"-H \"Accept: application/json\" ");
+
 	std::wstring cmd = L"\"C:\\Windows\\System32\\curl.exe\" -4 -sSL --connect-timeout 6 --max-time 25 "
 		L"-H \"User-Agent: SimpleWall/" APP_FORK_VERSION L"\" "
-		+ std::wstring (isBinaryDownload ? L"" : L"-H \"Accept: application/vnd.github+json\" ")
+		+ acceptArg
 		+ L"-o \"" + outPath + L"\" -w \"%{http_code}\" \"" + url + L"\"";
 
 	SECURITY_ATTRIBUTES sa = {};
@@ -3005,8 +3013,28 @@ void RunCheckUpdateAsync ()
 		std::wstring apiUrl = L"https://api.github.com/repos/" APP_FORK_OWNER L"/" APP_FORK_REPO L"/releases/latest";
 		std::string body;
 		DWORD status = 0;
+		bool usedWebFallback = false;
 
-		if (!WinHttpGetToBytes (apiUrl, body, status))
+		bool connected = WinHttpGetToBytes (apiUrl, body, status);
+
+		// If api.github.com is rate-limited (HTTP 403/429, common on shared VPN IPs) or fails,
+		// fall back immediately to rate-limit-free github.com/<owner>/<repo>/releases/latest!
+		if (!connected || (status != 200 && status != 404))
+		{
+			std::wstring webUrl = L"https://github.com/" APP_FORK_OWNER L"/" APP_FORK_REPO L"/releases/latest";
+			std::string webBody;
+			DWORD webStatus = 0;
+			if (WinHttpGetToBytes (webUrl, webBody, webStatus) && webStatus == 200 && !webBody.empty ())
+			{
+				body = std::move (webBody);
+				status = 200;
+				connected = true;
+				usedWebFallback = true;
+				WriteAuditLogLine (L"UPDATE", L"Used rate-limit-free github.com/releases/latest fallback");
+			}
+		}
+
+		if (!connected)
 		{
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateResult\",\"error\":\"Could not connect to GitHub. Check your internet connection or allow SimpleWall in your firewall.\"}");
 			return;
@@ -3035,27 +3063,42 @@ void RunCheckUpdateAsync ()
 		ExtractJsonString (wjson, L"html_url", htmlUrl);
 		ExtractJsonString (wjson, L"body", relNotes);
 
-		// Find first .exe or .zip asset browser_download_url
 		std::wstring downloadUrl, assetName;
-		size_t searchPos = wjson.find (L"\"assets\"");
-		while (searchPos != std::wstring::npos)
+		if (usedWebFallback && !tagName.empty ())
 		{
-			size_t urlKey = wjson.find (L"\"browser_download_url\"", searchPos);
-			if (urlKey == std::wstring::npos) break;
-			std::wstring slice = wjson.substr (urlKey, 600);
-			std::wstring candidate;
-			if (ExtractJsonString (slice, L"browser_download_url", candidate))
+			htmlUrl = L"https://github.com/" APP_FORK_OWNER L"/" APP_FORK_REPO L"/releases/tag/" + tagName;
+			downloadUrl = L"https://github.com/" APP_FORK_OWNER L"/" APP_FORK_REPO L"/releases/download/" + tagName + L"/simplewall.exe";
+			assetName = L"simplewall.exe";
+			relNotes = L"Release " + tagName + L" is ready to download and install.";
+		}
+		else
+		{
+			// Find first .exe or .zip asset browser_download_url
+			size_t searchPos = wjson.find (L"\"assets\"");
+			while (searchPos != std::wstring::npos)
 			{
-				std::wstring low = ToLower (candidate);
-				bool isSetup = (low.find (L"setup") != std::wstring::npos);
-				if ((low.ends_with (L".exe") && !isSetup) || low.ends_with (L".zip"))
+				size_t urlKey = wjson.find (L"\"browser_download_url\"", searchPos);
+				if (urlKey == std::wstring::npos) break;
+				std::wstring slice = wjson.substr (urlKey, 600);
+				std::wstring candidate;
+				if (ExtractJsonString (slice, L"browser_download_url", candidate))
 				{
-					downloadUrl = candidate;
-					assetName = ExtractFileName (candidate);
-					if (low.ends_with (L".exe") && !isSetup) break; // prefer direct simplewall.exe over installer
+					std::wstring low = ToLower (candidate);
+					bool isSetup = (low.find (L"setup") != std::wstring::npos);
+					if ((low.ends_with (L".exe") && !isSetup) || low.ends_with (L".zip"))
+					{
+						downloadUrl = candidate;
+						assetName = ExtractFileName (candidate);
+						if (low.ends_with (L".exe") && !isSetup) break; // prefer direct simplewall.exe over installer
+					}
 				}
+				searchPos = urlKey + 22;
 			}
-			searchPos = urlKey + 22;
+			if (downloadUrl.empty () && !tagName.empty ())
+			{
+				downloadUrl = L"https://github.com/" APP_FORK_OWNER L"/" APP_FORK_REPO L"/releases/download/" + tagName + L"/simplewall.exe";
+				assetName = L"simplewall.exe";
+			}
 		}
 
 		bool hasUpdate = !tagName.empty () && IsNewerVersion (tagName, APP_FORK_VERSION);
