@@ -32,6 +32,7 @@
 #include <cwctype>
 #include <deque>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -2854,10 +2855,21 @@ void RunCheckUpdateAsync ()
 	}).detach ();
 }
 
-void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
+std::mutex g_updateThreadMutex;
+HANDLE g_updateThread = nullptr;
+
+DWORD WINAPI InstallUpdateThreadProc (LPVOID param)
 {
-	UNREFERENCED_PARAMETER (assetName);
-	std::thread ([downloadUrl = std::move (downloadUrl)] () {
+	bool shouldExit = false;
+	HWND targetHwnd = nullptr;
+
+	// Inner scope ensures every C++ string/buffer (including the 1.6 MB download bytes)
+	// is 100% freed BEFORE posting WM_MODERN_UI_EXIT_FOR_UPDATE!
+	{
+		std::unique_ptr<std::wstring> urlPtr (reinterpret_cast<std::wstring *>(param));
+		std::wstring downloadUrl = urlPtr ? *urlPtr : L"";
+		urlPtr.reset ();
+
 		std::wstring low = ToLower (downloadUrl);
 		if (!low.starts_with (L"https://github.com/" APP_FORK_OWNER L"/") &&
 			!low.starts_with (L"https://github.com/") &&
@@ -2865,7 +2877,7 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 			!low.starts_with (L"https://release-assets.githubusercontent.com/"))
 		{
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Refused untrusted update URL.\"}");
-			return;
+			return 0;
 		}
 
 		PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"progress\":5,\"message\":\"Downloading update...\"}");
@@ -2876,7 +2888,7 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 		{
 			WriteAuditLogLine (L"UPDATE", L"Update download failed");
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Failed to download update package from GitHub.\"}");
-			return;
+			return 0;
 		}
 
 		WCHAR tempDir[MAX_PATH] = {};
@@ -2888,12 +2900,14 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 		if (hFile == INVALID_HANDLE_VALUE)
 		{
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Could not save downloaded update file.\"}");
-			return;
+			return 0;
 		}
 
 		DWORD written = 0;
 		WriteFile (hFile, bytes.data (), (DWORD)bytes.size (), &written, nullptr);
 		CloseHandle (hFile);
+		bytes.clear ();
+		bytes.shrink_to_fit ();
 
 		WCHAR selfPath[MAX_PATH] = {};
 		GetModuleFileNameW (nullptr, selfPath, MAX_PATH);
@@ -2931,7 +2945,7 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 		if (hScript == INVALID_HANDLE_VALUE)
 		{
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Could not create updater script.\"}");
-			return;
+			return 0;
 		}
 		WriteFile (hScript, batAnsi.data (), (DWORD)batAnsi.size (), &written, nullptr);
 		CloseHandle (hScript);
@@ -2946,15 +2960,44 @@ void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
 		{
 			CloseHandle (pi.hThread);
 			CloseHandle (pi.hProcess);
-			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"progress\":100,\"message\":\"Installing update & restarting...\"}");
-			if (g_hwnd && IsWindow (g_hwnd))
-				PostMessageW (g_hwnd, WM_MODERN_UI_EXIT_FOR_UPDATE, 0, 0);
+			targetHwnd = g_hwnd;
+			shouldExit = true;
 		}
 		else
 		{
 			PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Could not launch updater helper.\"}");
 		}
-	}).detach ();
+	}
+
+	if (shouldExit && targetHwnd && IsWindow (targetHwnd))
+		PostMessageW (targetHwnd, WM_MODERN_UI_EXIT_FOR_UPDATE, 0, 0);
+
+	return 0;
+}
+
+void RunInstallUpdateAsync (std::wstring downloadUrl, std::wstring assetName)
+{
+	UNREFERENCED_PARAMETER (assetName);
+	std::lock_guard<std::mutex> lock (g_updateThreadMutex);
+	if (g_updateThread)
+	{
+		if (WaitForSingleObject (g_updateThread, 0) == WAIT_TIMEOUT)
+			return; // already installing
+		CloseHandle (g_updateThread);
+		g_updateThread = nullptr;
+	}
+
+	auto *urlCopy = new std::wstring (std::move (downloadUrl));
+	HANDLE hThread = CreateThread (nullptr, 0, InstallUpdateThreadProc, urlCopy, 0, nullptr);
+	if (hThread)
+	{
+		g_updateThread = hThread;
+	}
+	else
+	{
+		delete urlCopy;
+		PostAsyncJsonFromWorker (L"{\"type\":\"updateInstallStatus\",\"error\":\"Could not start updater worker.\"}");
+	}
 }
 
 // ---- Online HD Transparent Logo Picker (homarr-labs/dashboard-icons + Local File Picker) ----
@@ -4819,6 +4862,19 @@ VOID _modern_ui_destroy (
 	g_alertReady.store (false);
 	g_alertHtmlReady.store (false);
 	g_alertQueue.clear ();
+
+	// Ensure updater worker thread has cleanly exited before CRT/process teardown
+	HANDLE hUpd = nullptr;
+	{
+		std::lock_guard<std::mutex> lock (g_updateThreadMutex);
+		hUpd = g_updateThread;
+		g_updateThread = nullptr;
+	}
+	if (hUpd)
+	{
+		WaitForSingleObject (hUpd, 3000);
+		CloseHandle (hUpd);
+	}
 
 	if (g_alertWebview)
 	{
