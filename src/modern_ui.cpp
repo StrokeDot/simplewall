@@ -3073,6 +3073,107 @@ void RunCheckUpdateAsync ()
 	}).detach ();
 }
 
+bool LaunchSwapperViaTaskScheduler (const std::wstring &batPath)
+{
+	HRESULT coHr = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+	bool didInit = SUCCEEDED (coHr);
+	bool ok = false;
+
+	ITaskService *pService = nullptr;
+	ITaskFolder *pRoot = nullptr;
+	ITaskDefinition *pDef = nullptr;
+	IRegisteredTask *pRegistered = nullptr;
+	IRunningTask *pRunning = nullptr;
+
+	HRESULT hr = CoCreateInstance (CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS (&pService));
+	if (SUCCEEDED (hr) && pService)
+	{
+		VARIANT vEmpty;
+		VariantInit (&vEmpty);
+		hr = pService->Connect (vEmpty, vEmpty, vEmpty, vEmpty);
+		if (SUCCEEDED (hr))
+		{
+			BSTR bRoot = SysAllocString (L"\\");
+			hr = pService->GetFolder (bRoot, &pRoot);
+			SysFreeString (bRoot);
+		}
+		if (SUCCEEDED (hr) && pRoot)
+			hr = pService->NewTask (0, &pDef);
+
+		if (SUCCEEDED (hr) && pDef)
+		{
+			IPrincipal *pPrincipal = nullptr;
+			if (SUCCEEDED (pDef->get_Principal (&pPrincipal)) && pPrincipal)
+			{
+				pPrincipal->put_LogonType (TASK_LOGON_INTERACTIVE_TOKEN);
+				pPrincipal->put_RunLevel (TASK_RUNLEVEL_HIGHEST);
+				pPrincipal->Release ();
+			}
+
+			ITaskSettings *pSettings = nullptr;
+			if (SUCCEEDED (pDef->get_Settings (&pSettings)) && pSettings)
+			{
+				pSettings->put_Enabled (VARIANT_TRUE);
+				pSettings->put_DisallowStartIfOnBatteries (VARIANT_FALSE);
+				pSettings->put_StopIfGoingOnBatteries (VARIANT_FALSE);
+				pSettings->put_AllowDemandStart (VARIANT_TRUE);
+				pSettings->put_Hidden (VARIANT_TRUE);
+				pSettings->Release ();
+			}
+
+			IActionCollection *pActions = nullptr;
+			if (SUCCEEDED (pDef->get_Actions (&pActions)) && pActions)
+			{
+				IAction *pAction = nullptr;
+				if (SUCCEEDED (pActions->Create (TASK_ACTION_EXEC, &pAction)) && pAction)
+				{
+					IExecAction *pExec = nullptr;
+					if (SUCCEEDED (pAction->QueryInterface (IID_PPV_ARGS (&pExec))) && pExec)
+					{
+						BSTR bExe = SysAllocString (L"C:\\Windows\\System32\\cmd.exe");
+						std::wstring args = L"/c \"" + batPath + L"\"";
+						BSTR bArgs = SysAllocString (args.c_str ());
+						pExec->put_Path (bExe);
+						pExec->put_Arguments (bArgs);
+						SysFreeString (bExe);
+						SysFreeString (bArgs);
+						pExec->Release ();
+					}
+					pAction->Release ();
+				}
+				pActions->Release ();
+			}
+
+			BSTR bTaskName = SysAllocString (L"SimpleWallUpdateSwap");
+			hr = pRoot->RegisterTaskDefinition (
+				bTaskName,
+				pDef,
+				TASK_CREATE_OR_UPDATE,
+				vEmpty,
+				vEmpty,
+				TASK_LOGON_INTERACTIVE_TOKEN,
+				vEmpty,
+				&pRegistered);
+			SysFreeString (bTaskName);
+
+			if (SUCCEEDED (hr) && pRegistered)
+			{
+				hr = pRegistered->Run (vEmpty, &pRunning);
+				if (SUCCEEDED (hr))
+					ok = true;
+			}
+		}
+	}
+
+	if (pRunning) pRunning->Release ();
+	if (pRegistered) pRegistered->Release ();
+	if (pDef) pDef->Release ();
+	if (pRoot) pRoot->Release ();
+	if (pService) pService->Release ();
+	if (didInit) CoUninitialize ();
+	return ok;
+}
+
 std::mutex g_updateThreadMutex;
 HANDLE g_updateThread = nullptr;
 
@@ -3148,10 +3249,12 @@ DWORD WINAPI InstallUpdateThreadProc (LPVOID param)
 			<< L"  goto retry\r\n"
 			<< L")\r\n"
 			<< L"start \"\" \"%TARGET%\"\r\n"
+			<< L"schtasks /delete /tn \"SimpleWallUpdateSwap\" /f >nul 2>&1\r\n"
 			<< L"del \"%~f0\" >nul 2>&1\r\n"
 			<< L"exit /b 0\r\n"
 			<< L":fail\r\n"
 			<< L"start \"\" \"%TARGET%\"\r\n"
+			<< L"schtasks /delete /tn \"SimpleWallUpdateSwap\" /f >nul 2>&1\r\n"
 			<< L"del \"%~f0\" >nul 2>&1\r\n";
 
 		std::wstring batText = bat.str ();
@@ -3170,14 +3273,18 @@ DWORD WINAPI InstallUpdateThreadProc (LPVOID param)
 
 		WriteAuditLogLine (L"UPDATE", L"Downloaded update cleanly, restarting to swap binary");
 
-		std::wstring cmd = L"cmd.exe /c \"" + batPath + L"\"";
-		STARTUPINFOW si = {};
-		si.cb = sizeof (si);
-		PROCESS_INFORMATION pi = {};
-		if (CreateProcessW (nullptr, cmd.data (), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+		// Launch out-of-process via Windows Task Scheduler Service to avoid AV/Exploit-Protection
+		// inline hooks on KERNELBASE!CreateProcessInternalW crashing with 0xC0000005!
+		bool launched = LaunchSwapperViaTaskScheduler (batPath);
+		if (!launched)
 		{
-			CloseHandle (pi.hThread);
-			CloseHandle (pi.hProcess);
+			std::wstring args = L"/c \"" + batPath + L"\"";
+			HINSTANCE hi = ShellExecuteW (nullptr, L"open", L"C:\\Windows\\System32\\cmd.exe", args.c_str (), nullptr, SW_HIDE);
+			launched = (reinterpret_cast<INT_PTR>(hi) > 32);
+		}
+
+		if (launched)
+		{
 			targetHwnd = g_hwnd;
 			shouldExit = true;
 		}

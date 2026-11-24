@@ -1014,7 +1014,7 @@ html, body {
       <div class="brand-logo" id="brandLogo">SW</div>
       <div>
         <div class="brand-title"><span>Simple</span><span class="wall-accent">Wall</span></div>
-        <div class="brand-sub" id="sidebarVersion">v4.2.11</div>
+        <div class="brand-sub" id="sidebarVersion">v4.2.12</div>
       </div>
     </div>
 
@@ -1117,7 +1117,7 @@ const state = {
   safePauseRemaining: 0,
   isApplying: false,
   theme: 'dark',
-  appVersion: '4.2.11',
+  appVersion: '4.2.12',
   forkRepo: 'StrokeDot/simplewall',
   settings: {},
   apps: [],
@@ -1263,6 +1263,8 @@ function setPage(page) {
   });
   if (page === 'diagnose') send('getDiagnose');
   renderPage();
+  const content = document.getElementById('pageContent');
+  if (content) content.scrollTop = 0;
 }
 
 document.querySelectorAll('.nav-item').forEach(btn => {
