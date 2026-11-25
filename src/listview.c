@@ -415,6 +415,9 @@ VOID _app_listview_showitemby_param (
 	INT listview_id = 0;
 	INT item_id;
 
+	if (_modern_ui_isactive ())
+		return;
+
 	if (is_app)
 	{
 		_app_getappinfobyhash (lparam, INFO_LISTVIEW_ID, &listview_id, sizeof (listview_id));

@@ -150,6 +150,13 @@ VOID _app_search_setvisible (
 {
 	BOOLEAN is_visible;
 
+	if (_modern_ui_isactive ())
+	{
+		if (hsearch && IsWindow (hsearch))
+			ShowWindow (hsearch, SW_HIDE);
+		return;
+	}
+
 	is_visible = _r_config_getboolean (L"IsShowSearchBar", TRUE);
 
 	if (is_visible)

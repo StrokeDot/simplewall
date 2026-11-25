@@ -463,7 +463,47 @@ VOID _modern_bridge_add_app (
 	_In_ HWND hwnd
 )
 {
-	SendMessageW (hwnd, WM_COMMAND, MAKEWPARAM (IDM_ADD_FILE, 0), 0);
+	static COMDLG_FILTERSPEC filters[] = {
+		L"Executable files (*.exe)", L"*.exe",
+		L"All files (*.*)", L"*.*",
+	};
+
+	R_FILE_DIALOG file_dialog;
+	PR_STRING path;
+	ULONG_PTR app_hash;
+	HRESULT status;
+
+	status = _r_filedialog_initialize (&file_dialog, PR_FILEDIALOG_OPENFILE);
+
+	if (SUCCEEDED (status))
+	{
+		_r_filedialog_setfilter (&file_dialog, filters, RTL_NUMBER_OF (filters));
+
+		status = _r_filedialog_show (hwnd, &file_dialog);
+
+		if (SUCCEEDED (status))
+		{
+			status = _r_filedialog_getpath (&file_dialog, &path);
+
+			if (SUCCEEDED (status))
+			{
+				app_hash = _app_addapplication (hwnd, DATA_UNKNOWN, path, NULL, NULL);
+
+				if (app_hash)
+				{
+					// Immediately allow the newly added app cleanly inside Modern UI (never open legacy Win32 list!)
+					_modern_bridge_allow_app (hwnd, app_hash, 0, FALSE);
+				}
+
+				_r_obj_dereference (path);
+			}
+		}
+
+		_r_filedialog_destroy (&file_dialog);
+	}
+
+	// Ensure legacy Win32 controls remain hidden
+	_modern_bridge_hide_legacy_controls (hwnd);
 	_modern_ui_notify_change ();
 }
 

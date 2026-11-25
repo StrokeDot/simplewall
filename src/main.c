@@ -2524,7 +2524,10 @@ INT_PTR CALLBACK DlgProc (
 				break;
 
 			_app_listview_updateby_param (hwnd, app_hash, PR_SETITEM_UPDATE, TRUE);
-			_app_listview_showitemby_param (hwnd, app_hash, TRUE);
+			if (_modern_ui_isactive ())
+				_modern_ui_notify_change ();
+			else
+				_app_listview_showitemby_param (hwnd, app_hash, TRUE);
 
 			break;
 		}
@@ -2654,10 +2657,13 @@ INT_PTR CALLBACK DlgProc (
 
 					_app_listview_updateby_id (hwnd, listview_id, PR_UPDATE_FORCE | PR_UPDATE_NORESIZE);
 
-					ShowWindow (hlistview, SW_SHOWNA);
+					if (!_modern_ui_isactive ())
+					{
+						ShowWindow (hlistview, SW_SHOWNA);
 
-					if (_r_wnd_isvisible (hwnd, TRUE)) // HACK!!!
-						SetFocus (hlistview);
+						if (_r_wnd_isvisible (hwnd, TRUE)) // HACK!!!
+							SetFocus (hlistview);
+					}
 
 					_app_listview_resize (hwnd, listview_id, FALSE);
 
