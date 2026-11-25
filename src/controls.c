@@ -1056,6 +1056,9 @@ VOID _app_window_resize (
 
 	context = _app_listview_getcontext (hwnd, INT_ERROR);
 
+	if (!context)
+		return;
+
 	rebar_height = _r_rebar_getheight (hwnd, IDC_REBAR);
 	statusbar_height = _r_status_getheight (hwnd, IDC_STATUSBAR);
 

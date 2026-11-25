@@ -2190,9 +2190,6 @@ INT_PTR CALLBACK DlgProc (
 			// allow drag&drop support
 			DragAcceptFiles (hwnd, TRUE);
 
-			// restore window position (required!)
-			_r_window_restoreposition (hwnd, L"window");
-
 			// initialize imagelist
 			_app_imagelist_init (hwnd, dpi_value);
 
@@ -2200,8 +2197,11 @@ INT_PTR CALLBACK DlgProc (
 			_app_toolbar_init (hwnd, dpi_value);
 			_app_toolbar_resize (hwnd, dpi_value);
 
-			// initialize tabs
+			// initialize tabs BEFORE restoring window position so multi-monitor WM_DPICHANGED never sees NULL tab context!
 			_app_tabs_init (hwnd, dpi_value);
+
+			// restore window position (required!)
+			_r_window_restoreposition (hwnd, L"window");
 
 			// load profile
 			_app_profile_load (hwnd, NULL);

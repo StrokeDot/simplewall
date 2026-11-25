@@ -459,6 +459,9 @@ VOID _app_listview_updateby_id (
 
 	context = _app_listview_getcontext (hwnd, INT_ERROR);
 
+	if (!context)
+		return;
+
 	if (flags & PR_UPDATE_TYPE)
 	{
 		type = lparam;
@@ -528,7 +531,8 @@ VOID _app_listview_updateby_param (
 
 	if ((flags & PR_SETITEM_REDRAW))
 	{
-		if (listview_id == _app_listview_getcontext (hwnd, INT_ERROR)->listview_id)
+		PITEM_TAB_CONTEXT cur_ctx = _app_listview_getcontext (hwnd, INT_ERROR);
+		if (cur_ctx && listview_id == cur_ctx->listview_id)
 			_r_listview_redraw (hwnd, listview_id);
 	}
 }
